@@ -3,6 +3,8 @@
 [![npm version](https://img.shields.io/npm/v/pi-openai-toolkit.svg)](https://www.npmjs.com/package/pi-openai-toolkit)
 [![license: MIT](https://img.shields.io/npm/l/pi-openai-toolkit.svg)](./LICENSE)
 
+[简体中文](./README.zh.md)
+
 OpenAI toolkit for Pi: Codex Remote Context windows, remote compaction v2, hosted Web Search, image gen, auto mode.
 
 `pi-openai-toolkit` bundles five Pi extensions for the OpenAI Responses wire family (`openai-responses` and `openai-codex-responses`):

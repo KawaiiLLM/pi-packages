@@ -13,7 +13,7 @@
 2. **联网搜索**（`extensions/web-search.ts`）：为 `provider/model-id` 精确白名单注入托管 `web_search`，复用当前模型连接。
 3. **图像生成**（`extensions/image-generation.ts`）：由托管 `image_generation` 工具驱动的本地 `openai_generate_image`，支持文生图与显式本地参考图编辑，图像字节不进会话历史。
 4. **Auto 模式**（`extensions/auto-mode.ts`）：为改变状态的工具调用增设审批模型门禁，Agent 不必停下来等你确认。
-5. **Codex Astra**（`extensions/codex-astra.ts`）：为 `gpt-6-astra` 补发 Codex 后端版本门禁头，并用 `configuration_update` 会话项保住提示缓存。
+5. **Codex Astra**（`extensions/codex-astra.ts`）：为 `gpt-6-astra` 补发 Codex 后端版本门禁头，并用 `configuration_update` 会话项保住提示缓存。按模型名静默启用，无配置段。
 
 本包是 Pi 扩展集而非可导入库：一切通过一个 JSON 配置文件驱动，在 Pi 内自动生效。
 
@@ -75,7 +75,7 @@ pi install git:github.com/awoaCrim/pi-openai-toolkit
 
 ## 使用
 
-所有功能由一个配置文件加会话内命令控制。无配置文件时：压缩与 Astra 在符合条件的模型上启用，联网搜索、图像生成、Auto 模式、Remote Context 全部默认不启用。
+所有功能由一个配置文件加会话内命令控制。无配置文件时：压缩按默认值运行；联网搜索、图像生成、Auto 模式、Remote Context 均需显式开启。Astra 兼容层与网关 Remote Context 按内置的 `gpt-6-astra` 模型名匹配启用，不走任何白名单。
 
 创建 `~/.pi/agent/extensions/pi-openai-toolkit/config.json`（Windows：`C:\Users\<user>\.pi\agent\extensions\pi-openai-toolkit\config.json`）：
 
@@ -84,7 +84,6 @@ pi install git:github.com/awoaCrim/pi-openai-toolkit
   "compaction": {
     "enabled": true,
     "contextManagement": "remote",
-    "codexGatewayModels": ["uwoacrimson/gpt-6-astra"],
     "contextReminderThresholdPercent": 10,
     "allowCompactionContinuityBreak": false,
     "remoteCompactModel": "uwoacrimson/gpt-5.6-luna",
@@ -104,8 +103,7 @@ pi install git:github.com/awoaCrim/pi-openai-toolkit
     "models": ["uwoacrimson/gpt-5.6-luna"],
     "reviewerModel": "uwoacrimson/gpt-5.6-luna",
     "gate": "side-effect"
-  },
-  "codexAstra": { "enabled": true, "models": ["uwoacrimson/gpt-6-astra"] }
+  }
 }
 ```
 
@@ -124,8 +122,7 @@ pi --model uwoacrimson/gpt-6-astra "继续部署任务"
 | 键 | 类型 / 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | *boolean*, `true` | 压缩扩展 hook 总开关。 |
-| `contextManagement` | `"off"` \| `"remote"`, `"off"` | 为原生 Codex 模型及 `codexGatewayModels` 条目启用 Codex 远端上下文管理。覆盖模型由其独占：不发送 `remote_compaction_v2`，且取消 Pi 原生压缩（见[安全](#安全)）。设回 `"off"` 即回滚。 |
-| `codexGatewayModels` | *string[]*, `[]` | 允许走 Codex 兼容网关跑 Remote Context 的精确 `provider/model-id`（如 `"uwoacrimson/gpt-5.6-luna"`，API 须为 `openai-responses`）。网关收到的是 `X-Codex-Model` 里的裸模型 ID，Base URL 保持配置的 `/v1`。 |
+| `contextManagement` | `"off"` \| `"remote"`, `"off"` | 启用 Codex 远端上下文管理。覆盖模型为原生 Codex 模型，加上在 Codex 兼容网关（`openai-responses`）上的 `gpt-6-astra`；匹配规则内置，无白名单。覆盖模型由其独占：不发送 `remote_compaction_v2`，且取消 Pi 原生压缩（见[安全](#安全)）。设回 `"off"` 即回滚。 |
 | `contextReminderThresholdPercent` | *integer* `0`-`100`, `5` | 仅 Remote Context：当前窗口剩余 token 低于窗口该百分比时，每窗口注入一次 checkpoint 提醒；`0` 关闭提醒（窗口耗尽兜底仍生效）。建议明显高于 Pi 原生 reserve 余量（默认 16384 token，约为 272k 窗口的 6%），让模型在撞阈值前有机会主动换窗。 |
 | `allowCompactionContinuityBreak` | *boolean*, `false` | v2 路径：最近一次压缩由其他方式（如文本摘要）生成时，允许从当前文本上下文重建密文链。 |
 | `remoteCompactModel` | *string \| null*, `null` | v2 路径：仅用于 synthetic `remote_compaction_v2` 请求的模型，会话模型不切换；必须与当前模型解析出相同生效 Base URL。 |
@@ -170,10 +167,7 @@ pi --model uwoacrimson/gpt-6-astra "继续部署任务"
 
 #### `codexAstra`
 
-| 键 | 类型 / 默认 | 说明 |
-| --- | --- | --- |
-| `enabled` | *boolean*, `true` | Astra 兼容层：后端版本门禁头 + 保缓存的档位改写（见下）。 |
-| `models` | *string[]*, `[]` | 接受 `configuration_update` 输入项的模型（目前仅 Astra 世代，如网关侧 `"uwoacrimson/gpt-6-astra"`）；版本头则对所有 `openai-codex-responses` 请求生效，与本名单无关。宿主（如 Oh My Pi）已实现同款改写时只开一边，避免双重插入。 |
+已移除。Astra 兼容层（对所有 `openai-codex-responses` 请求的版本门禁头，以及保缓存的 `configuration_update` 档位改写）现按模型名 `gpt-6-astra` 静默启用（限 Responses 系 API），无需任何配置；旧配置里的 `codexAstra` 段会按未知字段告警并忽略。唯一保留的注意事项：宿主（如 Oh My Pi）已实现同款改写时只开一边，避免双重插入。
 
 模型目录说明：Pi 内置 `openai-codex` 列表可能还没有 `gpt-6-astra`。在 `~/.pi/agent/models.json` 的内置 provider 下登记（`api: "openai-codex-responses"`、`baseUrl: "https://chatgpt.com/backend-api"`、`contextWindow: 272000`、`maxTokens: 128000`、`thinkingLevelMap` `low`…`max`）；令牌由 Pi 的 Codex OAuth 提供。
 
@@ -181,7 +175,7 @@ pi --model uwoacrimson/gpt-6-astra "继续部署任务"
 
 #### Codex 远端上下文管理
 
-`contextManagement` 为 `"remote"` 且会话模型被覆盖（原生 `openai-codex`，或 `codexGatewayModels` 中精确匹配且 API 为 `openai-responses` 的条目）时，会话进入 Codex 窗口生命周期：
+`contextManagement` 为 `"remote"` 且会话模型被覆盖（原生 `openai-codex`，或 API 为 `openai-responses` 的 `gpt-6-astra`；模型匹配内置）时，会话进入 Codex 窗口生命周期：
 
 - **窗口身份。** `session_start` 初始化窗口（first/current/previous id、窗口编号），以 `codex-context-window` 自定义消息持久化进 Pi 会话；resume 回放、fork 后重建。实时请求携带 `x-codex-window-id` 与 `x-codex-turn-metadata`。
 - **无摘要换窗。** `new_context` 安装新窗口并把旧窗口从模型上下文裁剪，不做任何再摘要；旧轮次仍可通过服务端 `history` 取回。

@@ -13,7 +13,7 @@ OpenAI toolkit for Pi: Codex Remote Context windows, remote compaction v2, hoste
 2. **Web Search** (`extensions/web-search.ts`): hosted `web_search` injection for an exact `provider/model-id` allowlist, reusing the live model connection.
 3. **Image Generation** (`extensions/image-generation.ts`): a local `openai_generate_image` tool backed by the hosted `image_generation` tool, for text-to-image and explicit local-reference edits without putting image bytes into session history.
 4. **Auto Mode** (`extensions/auto-mode.ts`): a reviewer-model approval gate on state-changing tool calls so the agent keeps working without interrupting you.
-5. **Codex Astra** (`extensions/codex-astra.ts`): Codex backend version-gate headers and cache-preserving `configuration_update` effort changes for `gpt-6-astra`.
+5. **Codex Astra** (`extensions/codex-astra.ts`): Codex backend version-gate headers and cache-preserving `configuration_update` effort changes for `gpt-6-astra`. Activated silently by model id; no configuration section.
 
 The package is a Pi extension set, not an importable library: everything is configured through one JSON file and activated automatically inside Pi.
 
@@ -75,7 +75,7 @@ Do not run `pi-remote-compact`, `@lll9p/pi-better-compaction`, or a standalone `
 
 ## Usage
 
-All features are controlled by one configuration file, plus per-session commands. With no config file present, compaction and Astra are enabled on eligible models while Web Search, image generation, auto mode, and Remote Context stay opt-in.
+All features are controlled by one configuration file, plus per-session commands. With no config file present, compaction runs with its defaults; Web Search, image generation, auto mode, and Remote Context stay opt-in. The Astra compatibility layer and gateway Remote Context are keyed off the built-in `gpt-6-astra` model id, not off any allowlist.
 
 Create `~/.pi/agent/extensions/pi-openai-toolkit/config.json` (Windows: `C:\Users\<user>\.pi\agent\extensions\pi-openai-toolkit\config.json`):
 
@@ -84,7 +84,6 @@ Create `~/.pi/agent/extensions/pi-openai-toolkit/config.json` (Windows: `C:\User
   "compaction": {
     "enabled": true,
     "contextManagement": "remote",
-    "codexGatewayModels": ["uwoacrimson/gpt-6-astra"],
     "contextReminderThresholdPercent": 10,
     "allowCompactionContinuityBreak": false,
     "remoteCompactModel": "uwoacrimson/gpt-5.6-luna",
@@ -104,8 +103,7 @@ Create `~/.pi/agent/extensions/pi-openai-toolkit/config.json` (Windows: `C:\User
     "models": ["uwoacrimson/gpt-5.6-luna"],
     "reviewerModel": "uwoacrimson/gpt-5.6-luna",
     "gate": "side-effect"
-  },
-  "codexAstra": { "enabled": true, "models": ["uwoacrimson/gpt-6-astra"] }
+  }
 }
 ```
 
@@ -124,8 +122,7 @@ Every key is optional; unknown keys are ignored with a warning rather than writt
 | Key | Type / default | Meaning |
 | --- | --- | --- |
 | `enabled` | *boolean*, `true` | Master switch for the compaction extension's hooks. |
-| `contextManagement` | `"off"` \| `"remote"`, `"off"` | Opt into Codex Remote Context management for native Codex models and `codexGatewayModels` entries. While it owns a covered model, `remote_compaction_v2` is never sent and Pi-native compaction is cancelled (see [Security](#security)). Set back to `"off"` to roll back. |
-| `codexGatewayModels` | *string[]*, `[]` | Exact `provider/model-id` entries allowed to run Remote Context through a Codex-compatible gateway (e.g. `"uwoacrimson/gpt-5.6-luna"` on `openai-responses`). The gateway receives the bare model id in `X-Codex-Model` and keeps the configured `/v1` base URL. |
+| `contextManagement` | `"off"` \| `"remote"`, `"off"` | Opt into Codex Remote Context management. Covered models are native Codex models plus `gpt-6-astra` on a Codex-compatible gateway (`openai-responses`); the match is built in, there is no allowlist. While it owns a covered model, `remote_compaction_v2` is never sent and Pi-native compaction is cancelled (see [Security](#security)). Set back to `"off"` to roll back. |
 | `contextReminderThresholdPercent` | *integer* `0`-`100`, `5` | Remote Context: inject the once-per-window checkpoint reminder when remaining tokens fall below this percentage of the context window. `0` disables reminders; the exhausted-window fallback still fires. Set it comfortably above Pi's native reserve band (default 16384 tokens ≈ 6% of a 272k window) so the model can roll over before the native threshold. |
 | `allowCompactionContinuityBreak` | *boolean*, `false` | v2 path: restart a fresh opaque chain from current session text when the latest compaction was made by another strategy (e.g. a text summary). |
 | `remoteCompactModel` | *string \| null*, `null` | v2 path: `provider/model-id` used only for the synthetic `remote_compaction_v2` request; the session model never switches. Must resolve to the same effective base URL as the active model. |
@@ -170,10 +167,7 @@ Every key is optional; unknown keys are ignored with a warning rather than writt
 
 #### `codexAstra`
 
-| Key | Type / default | Meaning |
-| --- | --- | --- |
-| `enabled` | *boolean*, `true` | Astra compatibility layer: backend version-gate header plus the cache-preserving effort rewrite below. |
-| `models` | *string[]*, `[]` | Models that accept the `configuration_update` input item (today only Astra-era models, e.g. `"uwoacrimson/gpt-6-astra"` on a gateway). The version header applies to all `openai-codex-responses` requests regardless of this list. Never enable this layer on a host that already implements the same rewrite (e.g. Oh My Pi) to avoid double-splicing. |
+Removed. The Astra compatibility layer (backend version-gate headers for all `openai-codex-responses` requests, plus the cache-preserving `configuration_update` effort rewrite) now activates silently for any model whose id is `gpt-6-astra` on a Responses-family API — no configuration needed, and old `codexAstra` sections in existing configs are ignored with an unknown-field warning. Only caveat left: do not run it together with another host that implements the same rewrite (e.g. Oh My Pi) to avoid double-splicing.
 
 Catalog note: Pi's bundled `openai-codex` list may not include `gpt-6-astra` yet. Register it in `~/.pi/agent/models.json` under the built-in provider (`api: "openai-codex-responses"`, `baseUrl: "https://chatgpt.com/backend-api"`, `contextWindow: 272000`, `maxTokens: 128000`, `thinkingLevelMap` `low`…`max`); Pi's Codex OAuth supplies the token.
 
@@ -181,7 +175,7 @@ Catalog note: Pi's bundled `openai-codex` list may not include `gpt-6-astra` yet
 
 #### Codex Remote Context management
 
-When `contextManagement` is `"remote"` and the session model is covered (native `openai-codex`, or an exact `codexGatewayModels` entry on `openai-responses`), the toolkit takes the session through the Codex window lifecycle:
+When `contextManagement` is `"remote"` and the session model is covered (native `openai-codex`, or `gpt-6-astra` on `openai-responses`; the model match is built in), the toolkit takes the session through the Codex window lifecycle:
 
 - **Window identity.** `session_start` initializes a window (first/current/previous ids, window number) persisted as a `codex-context-window` custom message in the Pi session; boundaries replay on resume and rebuild after forks. Live requests carry `x-codex-window-id` and `x-codex-turn-metadata`.
 - **No-summary rollover.** `new_context` installs a fresh window and trims the previous one from model context. Nothing is re-summarized; old turns stay retrievable server-side through `history`.

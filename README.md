@@ -16,13 +16,12 @@ OpenAI toolkit for Pi: Codex Remote Context windows, remote compaction v2, hoste
 The package is a Pi extension set, not an importable library: everything is configured through one JSON file and activated automatically inside Pi.
 
 ## Table of Contents
-
+- [Security](#security)
 - [Background](#background)
 - [Install](#install)
 - [Usage](#usage)
   - [Configuration](#configuration)
   - [Feature guides](#feature-guides)
-- [Security](#security)
 - [Development](#development)
 - [API](#api)
   - [Remote Context tools](#remote-context-tools)
@@ -30,6 +29,13 @@ The package is a Pi extension set, not an importable library: everything is conf
 - [Maintainers](#maintainers)
 - [Contributing](#contributing)
 - [License](#license)
+
+## Security
+
+- **No silent lossy summaries on covered models.** While `contextManagement: "remote"` covers a model, Pi-native compaction is cancelled on every path (threshold, manual `/compact`, overflow) even if the remote runtime is inactive, and v2 is never sent. If you additionally want host-level belt-and-braces, set `"compaction": { "enabled": false }` in Pi's `settings.json`; uncovered models keep Pi's normal policy either way.
+- **Gateway isolation.** Gateway-mode Remote Context forwards only the configured data-plane key; OAuth tokens, account cookies, and account ids are stripped, and artifacts always redact credentials, account ids, and opaque encrypted payloads.
+- **Checkpoint gate.** `new_context` cannot discard unsaved working state without either a successful notes write in the window or an explicit `force` the user authorized — the failure mode reported against Codex's own experimental rollout is blocked here.
+- **Billing and review boundaries.** Image generation is opt-in and may incur charges; auto mode reviews run with caching disabled, grant the reviewer read-only tools only, and fail closed in headless sessions.
 
 ## Background
 
@@ -192,13 +198,6 @@ With `contextManagement` off, eligible Responses sessions compact through `remot
 #### Auto Mode
 
 Engage per session with `pi --auto` or `/auto on` (footer shows state; engaging never stalls the current turn). Each gated call is reviewed by `reviewerModel`, which scores intrinsic risk and conversation authorization separately and derives `allow`/`deny` from a fixed table; it may investigate with read-only tools first; denials return the reason plus an anti-workaround clause; unfinished reviews are reported as failures, never safety verdicts. Every decision is persisted as a non-context session entry for audit. In headless (`-p`/JSON) sessions there is nobody to escalate to, so unavailable reviews block.
-
-## Security
-
-- **No silent lossy summaries on covered models.** While `contextManagement: "remote"` covers a model, Pi-native compaction is cancelled on every path (threshold, manual `/compact`, overflow) even if the remote runtime is inactive, and v2 is never sent. If you additionally want host-level belt-and-braces, set `"compaction": { "enabled": false }` in Pi's `settings.json`; uncovered models keep Pi's normal policy either way.
-- **Gateway isolation.** Gateway-mode Remote Context forwards only the configured data-plane key; OAuth tokens, account cookies, and account ids are stripped, and artifacts always redact credentials, account ids, and opaque encrypted payloads.
-- **Checkpoint gate.** `new_context` cannot discard unsaved working state without either a successful notes write in the window or an explicit `force` the user authorized — the failure mode reported against Codex's own experimental rollout is blocked here.
-- **Billing and review boundaries.** Image generation is opt-in and may incur charges; auto mode reviews run with caching disabled, grant the reviewer read-only tools only, and fail closed in headless sessions.
 
 ## Development
 

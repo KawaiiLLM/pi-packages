@@ -31,6 +31,7 @@ The package is a Pi extension set, not an importable library: everything is conf
 - [Maintainers](#maintainers)
 - [Contributing](#contributing)
 - [License](#license)
+- [Thanks](#thanks)
 
 ## Security
 
@@ -244,3 +245,7 @@ Issues and pull requests are welcome at the [issue tracker](https://github.com/a
 ## License
 
 MIT © awoaCrim and contributors. See [LICENSE](./LICENSE) and the third-party attribution in [NOTICE](./NOTICE).
+
+## Thanks
+
+Thanks to the [Linux.do](https://linux.do/) community for the support and discussions.

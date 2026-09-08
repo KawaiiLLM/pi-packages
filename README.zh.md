@@ -31,6 +31,7 @@
 - [维护者](#维护者)
 - [贡献](#贡献)
 - [许可证](#许可证)
+- [致谢](#致谢)
 
 ## 安全
 
@@ -244,3 +245,7 @@ GET  {base}/alpha/notes/v2/thread_hint
 ## 许可证
 
 MIT © awoaCrim and contributors。见 [LICENSE](./LICENSE)，第三方归属见 [NOTICE](./NOTICE)。
+
+## 致谢
+
+感谢 [Linux.do](https://linux.do/) 社区的支持与讨论。

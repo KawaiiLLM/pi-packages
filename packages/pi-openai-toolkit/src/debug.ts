@@ -1,0 +1,237 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	COMPACTION_EXTENSION_ID,
+	REDACTED_VALUE,
+	type ArtifactContext,
+	type ArtifactPaths,
+	type ArtifactSessionInfo,
+	type DebugArtifactEnvelope,
+	type DebugArtifactKind,
+	type CompactionConfig,
+	type RedactOptions,
+} from "./types";
+
+const CRITICAL_KEY_RE = /(authorization|api[-_]?key|token|credential|oauth|auth|account[-_]?id|encrypted[_-]?(content|output))/i;
+const SENSITIVE_KEY_RE = /(authorization|api[-_]?key|token|secret|password|cookie|set-cookie|signature|credential|oauth|auth|account[-_]?id|encrypted[_-]?(content|output))/i;
+const BEARER_RE = /\bBearer\s+[A-Za-z0-9._\-+/=]+/gi;
+const OPENAI_KEY_RE = /\bsk-[A-Za-z0-9\-_]+\b/g;
+const HEADER_TOKEN_RE = /\b(x-api-key|api-key|authorization|chatgpt-account-id)\b\s*[:=]\s*[^\s,;]+/gi;
+const SENSITIVE_QUERY_RE = /([?&](?:api[-_]?key|access[-_]?token|token|secret|signature|credential|password)=)[^&#\s]*/gi;
+
+function ensureDir(dirPath: string) {
+	fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function toSessionInfo(context: ArtifactContext): ArtifactSessionInfo {
+	const maybeExtensionContext = context as Pick<ExtensionContext, "cwd" | "sessionManager">;
+	const sessionManager = maybeExtensionContext.sessionManager;
+	if (sessionManager) {
+		return {
+			cwd: context.cwd,
+			sessionId: sessionManager.getSessionId(),
+			sessionFile: sessionManager.getSessionFile(),
+			sessionDir: sessionManager.getSessionDir(),
+		};
+	}
+	return context;
+}
+
+function sanitizePathSegment(value: string | undefined, fallback: string): string {
+	if (!value) return fallback;
+	const normalized = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+	return normalized.length > 0 ? normalized : fallback;
+}
+
+function redactInlineSecrets(value: string, placeholder: string): string {
+	return value
+		.replace(BEARER_RE, `Bearer ${placeholder}`)
+		.replace(OPENAI_KEY_RE, placeholder)
+		.replace(HEADER_TOKEN_RE, (_match, key: string) => `${key}: ${placeholder}`)
+		.replace(SENSITIVE_QUERY_RE, (_match, prefix: string) => `${prefix}${placeholder}`);
+}
+
+function redactWithKeyPattern(
+	value: unknown,
+	keyPattern: RegExp,
+	options: RedactOptions = {},
+): unknown {
+	const placeholder = options.placeholder ?? REDACTED_VALUE;
+	const seen = new WeakSet<object>();
+
+	const visit = (input: unknown): unknown => {
+		if (typeof input === "string") {
+			return redactInlineSecrets(input, placeholder);
+		}
+		if (!input || typeof input !== "object") {
+			return input;
+		}
+		if (seen.has(input)) {
+			return "[Circular]";
+		}
+		seen.add(input);
+
+		if (Array.isArray(input)) {
+			return input.map((item) => visit(item));
+		}
+
+		const result: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(input)) {
+			result[key] = keyPattern.test(key) ? placeholder : visit(item);
+		}
+		return result;
+	};
+
+	return visit(value);
+}
+
+/** Credentials and opaque checkpoints are never written to artifacts, even when optional redaction is disabled. */
+export function redactCriticalValue(value: unknown, options: RedactOptions = {}): unknown {
+	return redactWithKeyPattern(value, CRITICAL_KEY_RE, options);
+}
+
+export function redactValue(value: unknown, options: RedactOptions = {}): unknown {
+	return redactWithKeyPattern(value, SENSITIVE_KEY_RE, options);
+}
+
+export function resolveArtifactPaths(settings: CompactionConfig, context: ArtifactContext): ArtifactPaths {
+	const sessionInfo = toSessionInfo(context);
+	const rootDir = settings.artifactRoot.startsWith("~/")
+		? path.join(os.homedir(), settings.artifactRoot.slice(2))
+		: path.resolve(settings.artifactRoot);
+	const sessionDir = path.join(rootDir, "sessions", sanitizePathSegment(sessionInfo.sessionId, "no-session"));
+
+	return {
+		rootDir,
+		sessionDir,
+		providerRequestsDir: path.join(sessionDir, "provider-requests"),
+		compactResponsesDir: path.join(sessionDir, "compact-responses"),
+		compactionDir: path.join(sessionDir, "compaction-events"),
+		lifecycleDir: path.join(sessionDir, "lifecycle"),
+	};
+}
+
+function selectArtifactDirectory(paths: ArtifactPaths, kind: DebugArtifactKind): string {
+	switch (kind) {
+		case "provider-request":
+			return paths.providerRequestsDir;
+		case "compact-response":
+			return paths.compactResponsesDir;
+		case "compaction-event":
+			return paths.compactionDir;
+		case "lifecycle":
+		default:
+			return paths.lifecycleDir;
+	}
+}
+
+function shouldWriteArtifact(kind: DebugArtifactKind, settings: CompactionConfig): boolean {
+	switch (kind) {
+		case "provider-request":
+			return settings.logProviderPayloads;
+		case "compact-response":
+			return settings.logCompactResponses;
+		case "compaction-event":
+		case "lifecycle":
+			return settings.debug;
+		default:
+			return false;
+	}
+}
+
+export function writeDebugArtifact(
+	kind: DebugArtifactKind,
+	data: unknown,
+	settings: CompactionConfig,
+	context: ArtifactContext,
+): string | undefined {
+	if (!shouldWriteArtifact(kind, settings)) {
+		return undefined;
+	}
+
+	const sessionInfo = toSessionInfo(context);
+	const paths = resolveArtifactPaths(settings, context);
+	const targetDir = selectArtifactDirectory(paths, kind);
+	ensureDir(targetDir);
+
+	const timestamp = new Date().toISOString();
+	const fileName = `${timestamp.replace(/[.:]/g, "-")}-${kind}.json`;
+	const filePath = path.join(targetDir, fileName);
+	const criticallyRedactedData = redactCriticalValue(data);
+	const envelope: DebugArtifactEnvelope = {
+		extension: COMPACTION_EXTENSION_ID,
+		kind,
+		timestamp,
+		cwd: sessionInfo.cwd,
+		sessionId: sessionInfo.sessionId,
+		sessionFile: sessionInfo.sessionFile,
+		sessionDir: sessionInfo.sessionDir,
+		redaction: {
+			enabled: settings.redactSensitiveData,
+		},
+		data: settings.redactSensitiveData ? redactValue(criticallyRedactedData) : criticallyRedactedData,
+	};
+
+	fs.writeFileSync(filePath, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
+	return filePath;
+}
+
+/**
+ * Always-written, content-free failure record for an opaque replay failure.
+ *
+ * Unlike regular payload artifacts this is not gated by logProviderPayloads:
+ * a replay failure is a continuity-loss incident, not optional payload logging.
+ * It contains only structural parity signatures and identity metadata; prompt
+ * text, user content, credentials, and encrypted_content are never included
+ * (critical redaction is applied unconditionally).
+ */
+export function writeReplayFailureArtifact(
+	details: {
+		reason: string;
+		parity?: { actual: string[]; expected: string[]; mismatches: string[] };
+		compactionEntryId?: string;
+		provider?: string;
+		api?: string;
+		model?: string;
+	},
+	settings: CompactionConfig,
+	context: ArtifactContext,
+): string | undefined {
+	try {
+		const sessionInfo = toSessionInfo(context);
+		const paths = resolveArtifactPaths(settings, context);
+		const targetDir = selectArtifactDirectory(paths, "provider-request");
+		ensureDir(targetDir);
+
+		const timestamp = new Date().toISOString();
+		const filePath = path.join(targetDir, `${timestamp.replace(/[.:]/g, "-")}-replay-failure.json`);
+		const data = redactCriticalValue({
+			event: "before_provider_request.rewrite-failed",
+			reason: details.reason,
+			parity: details.parity,
+			compactionEntryId: details.compactionEntryId,
+			provider: details.provider,
+			api: details.api,
+			model: details.model,
+		});
+		const envelope: DebugArtifactEnvelope = {
+			extension: COMPACTION_EXTENSION_ID,
+			kind: "provider-request",
+			timestamp,
+			cwd: sessionInfo.cwd,
+			sessionId: sessionInfo.sessionId,
+			sessionFile: sessionInfo.sessionFile,
+			sessionDir: sessionInfo.sessionDir,
+			redaction: { enabled: true },
+			data,
+		};
+		fs.writeFileSync(filePath, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
+		return filePath;
+	} catch {
+		// The replay failure path itself must never be masked by an artifact write
+		// error; the caller still aborts the provider request.
+		return undefined;
+	}
+}

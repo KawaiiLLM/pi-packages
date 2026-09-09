@@ -1,6 +1,6 @@
 # pi-openai-toolkit
 
-> **Pi AgentFlow integration:** the standalone Auto gate is excluded from the extension manifest. Approvals belong to `pi-permission-system` and `pi-auto-mode`; other features remain. The upstream Auto configuration and `/auto` instructions below do not apply to this distribution's default loading. See the repository-root `UPSTREAMS.md` for provenance and changes.
+> **pi-packages integration:** the standalone Auto gate is excluded from the extension manifest. Approvals belong to `pi-permission-system` and `pi-auto-mode`; other features remain. The upstream Auto configuration and `/auto` instructions below do not apply to this distribution's default loading. See the repository-root `UPSTREAMS.md` for provenance and changes.
 
 [![npm version](https://img.shields.io/npm/v/pi-openai-toolkit.svg)](https://www.npmjs.com/package/pi-openai-toolkit)
 [![license: MIT](https://img.shields.io/npm/l/pi-openai-toolkit.svg)](./LICENSE)

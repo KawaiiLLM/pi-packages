@@ -22,7 +22,7 @@ Toolkit 将工具参数裁剪到 8,000 字符后继续审核；历史采用它�
 ## 启用
 
 ```bash
-# 从 Pi AgentFlow 仓库根目录安装
+# 从 pi-packages 仓库根目录安装
 pi install ./packages/pi-auto-mode
 ```
 

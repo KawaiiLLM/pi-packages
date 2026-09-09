@@ -1,4 +1,4 @@
-# Pi AgentFlow
+# pi-packages
 
 个人 Pi 扩展 monorepo。统一维护需要的包，保留上游实现与历史；不把审批、代理调度和 OpenAI 上下文机制混成一个扩展。
 

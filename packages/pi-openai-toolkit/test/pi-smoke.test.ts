@@ -6,6 +6,7 @@ const packageDir = resolve(import.meta.dir, "..");
 const runnerPath = join(import.meta.dir, "pi-smoke-runner.ts");
 const targets = [
 	["compaction entry", "compaction"],
+	["disabled context tools with Pi default activation", "disabled_tools"],
 	["native post-tool compaction", "native_threshold"],
 	["Pi-disabled compaction", "native_disabled"],
 	["below-threshold continuation", "native_under"],

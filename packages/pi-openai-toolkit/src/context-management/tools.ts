@@ -176,11 +176,8 @@ export class ContextManagementToolController {
 		promptGuidelines?: string[];
 	}>();
 	private readonly ownedNames = new Set<string>();
-	private readonly baselineNames = new Set<string>();
 	private registered = false;
-	private registrationChecked = false;
 	private registrationValid = false;
-	private baselineCaptured = false;
 
 	constructor(private readonly pi: ExtensionAPI) {}
 
@@ -192,12 +189,6 @@ export class ContextManagementToolController {
 		// registerTool() is a registration method and is valid while Pi is loading
 		// the extension. Do not call action methods such as getAllTools() here;
 		// those are bound only after extension loading completes.
-		try {
-			for (const definition of definitions) api.registerTool(definition);
-		} catch {
-			return false;
-		}
-
 		this.registeredNames.clear();
 		this.definitions.clear();
 		for (const definition of definitions) {
@@ -209,15 +200,21 @@ export class ContextManagementToolController {
 			});
 		}
 		this.registered = true;
-		this.registrationChecked = false;
 		this.registrationValid = false;
-		return true;
+		try {
+			for (const definition of definitions) api.registerTool(definition);
+			return true;
+		} catch {
+			// Retain definitions so sync(false) can clean up tools registered
+			// before a later registration failed, without touching foreign tools.
+			return false;
+		}
 	}
 
 	private verifyRegistration(): boolean {
+		this.ownedNames.clear();
+		this.registrationValid = false;
 		if (!this.registered) return false;
-		if (this.registrationChecked) return this.registrationValid;
-		this.registrationChecked = true;
 		try {
 			const api = this.pi as ExtensionAPI & { getAllTools?: () => Array<{
 				name: string;
@@ -227,56 +224,37 @@ export class ContextManagementToolController {
 			}> };
 			if (typeof api.getAllTools !== "function") return false;
 			const available = new Map(api.getAllTools().map((tool) => [tool.name, tool]));
-			this.registrationValid = [...this.registeredNames].every((name) => {
+			for (const name of this.registeredNames) {
 				const actual = available.get(name);
 				const expected = this.definitions.get(name);
-				return actual !== undefined && expected !== undefined &&
+				if (actual !== undefined && expected !== undefined &&
 					actual.description === expected.description &&
 					actual.parameters === expected.parameters &&
-					actual.promptGuidelines === expected.promptGuidelines;
-			});
+					actual.promptGuidelines === expected.promptGuidelines) {
+					this.ownedNames.add(name);
+				}
+			}
+			this.registrationValid = this.ownedNames.size === this.registeredNames.size;
 		} catch {
 			this.registrationValid = false;
 		}
-		if (!this.registrationValid) this.ownedNames.clear();
 		return this.registrationValid;
 	}
 
-	private captureBaseline(): boolean {
-		if (this.baselineCaptured) return true;
-		try {
-			const api = this.pi as ExtensionAPI & { getActiveTools?: () => string[] };
-			if (typeof api.getActiveTools !== "function") return false;
-			this.baselineNames.clear();
-			for (const name of api.getActiveTools()) this.baselineNames.add(name);
-			this.baselineCaptured = true;
-			return true;
-		} catch {
-			return false;
-		}
-	}
-
 	sync(active: boolean): boolean {
-		if (!this.verifyRegistration() || !this.captureBaseline()) return false;
+		const valid = this.verifyRegistration();
 		const api = this.pi as ExtensionAPI & { getActiveTools?: () => string[]; setActiveTools?: (names: string[]) => void };
 		if (typeof api.getActiveTools !== "function" || typeof api.setActiveTools !== "function") return false;
 		try {
 			const current = api.getActiveTools();
-			if (active) {
-				const next = [...current];
-				for (const name of this.registeredNames) {
-					if (!next.includes(name) && !this.baselineNames.has(name)) {
-						next.push(name);
-						this.ownedNames.add(name);
-					}
-				}
-				if (next.length !== current.length) api.setActiveTools(next);
-				return true;
-			}
-			const next = current.filter((name) => !this.ownedNames.has(name));
+			// Pi activates registered extension tools by default. Ownership comes
+			// from the live definitions, never from when a name became active.
+			// A partial/conflicting registration must not expose half a runtime.
+			const next = active && valid
+				? [...current, ...[...this.ownedNames].filter((name) => !current.includes(name))]
+				: current.filter((name) => !this.ownedNames.has(name));
 			if (next.length !== current.length) api.setActiveTools(next);
-			this.ownedNames.clear();
-			return true;
+			return valid;
 		} catch {
 			return false;
 		}
@@ -284,8 +262,7 @@ export class ContextManagementToolController {
 
 	reset(): void {
 		this.sync(false);
-		this.baselineNames.clear();
-		this.baselineCaptured = false;
+		this.registrationValid = false;
 	}
 	get isRegistered(): boolean { return this.registrationValid; }
 }

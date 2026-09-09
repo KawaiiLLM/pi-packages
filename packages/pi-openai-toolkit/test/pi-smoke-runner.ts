@@ -5,6 +5,7 @@ import { createSmokeEnvironment } from "./pi-smoke-environment";
 const packageDir = resolve(import.meta.dirname, "..");
 const targetByName: Record<string, string> = {
 	compaction: join(packageDir, "extensions/compaction.ts"),
+	disabled_tools: join(packageDir, "extensions/compaction.ts"),
 	web_search: join(packageDir, "extensions/web-search.ts"),
 	image_generation: join(packageDir, "extensions/image-generation.ts"),
 	auto_mode: join(packageDir, "extensions/auto-mode.ts"),
@@ -23,6 +24,12 @@ try {
 	const manifest = JSON.parse(await readFile(join(packageDir, "node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8"));
 	if (manifest.version !== "0.85.1") throw new Error(`Unexpected local Pi version: ${manifest.version}`);
 	const imageSmoke = targetName === "image_generation";
+	const disabledToolsSmoke = targetName === "disabled_tools";
+	if (disabledToolsSmoke) {
+		const configDir = join(env.agentDir, "extensions/pi-openai-toolkit");
+		await mkdir(configDir, { recursive: true });
+		await writeFile(join(configDir, "config.json"), JSON.stringify({ compaction: { enabled: false } }));
+	}
 	if (imageSmoke) {
 		const configDir = join(env.agentDir, "extensions/pi-openai-toolkit");
 		await mkdir(configDir, { recursive: true });
@@ -48,7 +55,7 @@ try {
 	const { session } = await createAgentSession({
 		cwd: env.cwd, agentDir: env.agentDir, modelRuntime, settingsManager, resourceLoader,
 		sessionManager: SessionManager.inMemory(env.cwd), model: faux.getModel(),
-		noTools: imageSmoke ? "builtin" : "all",
+		noTools: disabledToolsSmoke ? undefined : imageSmoke ? "builtin" : "all",
 	});
 	try {
 		if (imageSmoke) {
@@ -57,6 +64,12 @@ try {
 			if (!session.systemPrompt.includes("Use openai_generate_image when the user explicitly asks")) throw new Error("Missing image tool guidelines");
 		}
 		await session.prompt("Reply with the single word OK.");
+		if (disabledToolsSmoke) {
+			for (const name of ["new_context", "get_context_remaining", "history", "notes"]) {
+				if (session.getActiveToolNames().includes(name)) throw new Error(`Disabled tool remained active: ${name}`);
+			}
+			if (!session.getActiveToolNames().includes("read")) throw new Error("Unrelated read tool was removed");
+		}
 		const last = session.messages.at(-1);
 		if (last?.role !== "assistant" || last.content.filter((block) => block.type === "text").map((block) => block.text).join("") !== "OK") throw new Error("Unexpected faux response");
 		if (faux.state.callCount !== 1 || session.messages.some((message) => message.role === "toolResult")) throw new Error("Loading smoke unexpectedly ran another request/tool");

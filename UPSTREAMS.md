@@ -33,6 +33,7 @@ git diff 32d568ab HEAD:packages/pi-openai-toolkit
 - 所有包标为私有，未发布或修改上游归属。
 - `pi-auto-mode` 通过 `workspace:*` 链接本仓两个 gotgenes 服务包，而非另装注册表副本；其运行逻辑未重写。
 - Toolkit 加载清单不再包含 `extensions/auto-mode.ts`；相应清单测试同步调整。原 Auto 源码保留，但不作为第二个门禁自动加载。
+- Toolkit 上下文工具按当前 registry 中的定义确认归属，不再将 Pi 启动时自动激活的工具误认为外部基线；关闭功能会隐藏本插件工具，启用恢复。每次同步重新检查归属，部分注册失败或同名冲突时仅清理仍属于本插件的工具。新增控制器回归测试和真实 Pi 默认激活场景的冒烟测试。
 - Toolkit 移除 npm `bun` 开发依赖，改为环境前置要求，避免跳过安装脚本后空执行文件造成测试假通过。
 - pnpm catalog 和 TypeScript 基础配置取自 gotgenes 基线并缩减到当前使用项。
 

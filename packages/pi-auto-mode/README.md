@@ -1,4 +1,4 @@
-# Pi Model Approver（本地实验扩展）
+# Pi Auto Mode（本地实验扩展）
 
 将 `pi-permission-system` 的 `ask` 请求交给 `pi-subagents` 运行的审批代理。审核策略、材料构造、裁剪和结果解析直接复用 `pi-openai-toolkit` 的源码快照，不维护第二套规则。来源、固定提交及必要的导入调整见 [vendor 说明](src/vendor/toolkit/README.md)。
 
@@ -22,7 +22,8 @@ Toolkit 将工具参数裁剪到 8,000 字符后继续审核；历史采用它�
 ## 启用
 
 ```bash
-pi install /Users/zhaoqixuan/Projects/pi-model-approver
+# 从 Pi AgentFlow 仓库根目录安装
+pi install ./packages/pi-auto-mode
 ```
 
 在权限系统配置中合并：

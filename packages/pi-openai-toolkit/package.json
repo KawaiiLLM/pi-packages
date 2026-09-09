@@ -1,7 +1,7 @@
 {
   "name": "pi-openai-toolkit",
   "version": "0.14.4",
-  "private": false,
+  "private": true,
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -37,7 +37,6 @@
       "./extensions/compaction.ts",
       "./extensions/web-search.ts",
       "./extensions/image-generation.ts",
-      "./extensions/auto-mode.ts",
       "./extensions/codex-astra.ts"
     ]
   },
@@ -121,7 +120,6 @@
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@earendil-works/pi-tui": "0.85.1",
     "@types/node": "24.12.4",
-    "bun": "1.2.23",
     "typescript": "5.9.3"
   }
 }

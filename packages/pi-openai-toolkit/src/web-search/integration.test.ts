@@ -33,18 +33,15 @@ describe("Compaction and Web Search integration", () => {
 			"./extensions/compaction.ts",
 			"./extensions/web-search.ts",
 			"./extensions/image-generation.ts",
-			"./extensions/auto-mode.ts",
 			"./extensions/codex-astra.ts",
 		]);
 		const extensions = packageJson.pi?.extensions ?? [];
 		expect(extensions.indexOf("./extensions/compaction.ts")).toBeLessThan(
 			extensions.indexOf("./extensions/web-search.ts"),
 		);
-		// Auto mode gates tool execution, so it must not sit between the two
-		// provider-payload hooks whose relative order is semantic.
-		expect(extensions.indexOf("./extensions/auto-mode.ts")).toBeGreaterThan(
-			extensions.indexOf("./extensions/web-search.ts"),
-		);
+		// This distribution routes approvals through pi-auto-mode and the
+		// permission system, never a second independent toolkit gate.
+		expect(extensions).not.toContain("./extensions/auto-mode.ts");
 	});
 
 	test("compaction caches pre-search tools while the final live payload receives native search", () => {

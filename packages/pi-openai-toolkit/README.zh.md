@@ -1,5 +1,7 @@
 # pi-openai-toolkit
 
+> **Pi AgentFlow 集成版本**：独立 Auto 门禁已从加载清单移除，审批改由 `pi-permission-system` 与 `pi-auto-mode` 负责。其他功能保留。下文为上游文档，Auto 配置与 `/auto` 用法不适用于本发行版的默认加载方式。来源及差异见仓库根目录 `UPSTREAMS.md`。
+
 [![npm version](https://img.shields.io/npm/v/pi-openai-toolkit.svg)](https://www.npmjs.com/package/pi-openai-toolkit)
 [![license: MIT](https://img.shields.io/npm/l/pi-openai-toolkit.svg)](./LICENSE)
 [English](./README.md)

@@ -16,9 +16,10 @@ export const MAX_REVIEW_INTENT_CHARS = 2_000;
 export const MAX_REVIEW_REASON_CHARS = 600;
 export const MAX_REVIEW_MODEL_KEY_CHARS = 256;
 
-/** Budgets for the compact transcript handed to the reviewer. */
-export const MAX_TRANSCRIPT_CHARS = 24_000;
+/** Independent transcript pools; assistant/tool evidence cannot displace user messages. */
+export const MAX_TRANSCRIPT_USER_CHARS = 12_000;
 export const MAX_TRANSCRIPT_TOOL_CHARS = 12_000;
+export const MAX_TRANSCRIPT_CHARS = MAX_TRANSCRIPT_USER_CHARS + MAX_TRANSCRIPT_TOOL_CHARS;
 export const MAX_TRANSCRIPT_ENTRY_CHARS = 2_000;
 export const MAX_TRANSCRIPT_RECENT_ENTRIES = 40;
 export const TRUNCATION_MARKER = "<truncated />";
@@ -26,8 +27,8 @@ export const TRUNCATION_MARKER = "<truncated />";
 /** Risk of the planned action itself, as scored by the reviewer. */
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
-/** How far the observed conversation actually authorizes that action. */
-export type UserAuthorization = "unknown" | "low" | "medium" | "high";
+/** Authorization strength, or an explicit user prohibition (a veto, not a score). */
+export type UserAuthorization = "forbidden" | "unknown" | "low" | "medium" | "high";
 
 /**
  * Why a review could not be completed. Kept separate from `deny` on purpose: an

@@ -2,7 +2,8 @@ import { transcriptFromEntries } from "./vendor/toolkit/transcript.ts";
 import { buildReviewPrompt } from "./vendor/toolkit/prompt.ts";
 
 // Only adapt the permission system's evidence to Toolkit's existing inputs.
-// Transcript selection, truncation, prompt framing and budgets are upstream's.
+// The vendored transcript uses independent user/evidence quotas; action
+// truncation and prompt framing remain upstream's.
 export function toolInputFromPermission(details) {
   const payload = details.payload;
   const inputEvidence = payload.evidence.find(item => item.label === "input");

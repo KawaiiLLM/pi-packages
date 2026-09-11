@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CreateSubagentSessionParams } from "#src/lifecycle/create-subagent-session";
+import { ConcurrencyLimiter } from "#src/lifecycle/concurrency-limiter";
 import { Subagent, type SubagentExecution, type SubagentLifecycleObserver } from "#src/lifecycle/subagent";
 import { SubagentSession, type TurnLoopResult } from "#src/lifecycle/subagent-session";
 import { SubagentState, type SubagentStateInit } from "#src/lifecycle/subagent-state";
@@ -883,6 +884,21 @@ describe("Subagent — disposing a held workspace", () => {
 		expect(agent.pendingQuestion).toBe("And the fallback?");
 	});
 
+	it("releases a stopped resume's workspace even when it asked another question", async () => {
+		const { agent, workspace, stub, ask } = await heldWorkspaceAgent();
+		const pending = Promise.withResolvers<string>();
+		stub.resumeTurnLoop.mockImplementation(() => {
+			ask("Another question?");
+			return pending.promise;
+		});
+		const run = agent.resume("answer", { isBackground: true });
+		agent.abort();
+		pending.resolve("partial answer");
+		await run;
+		expect(agent.status).toBe("stopped");
+		expect(workspace.dispose).toHaveBeenCalledExactlyOnceWith({ status: "stopped", description: "run test" });
+	});
+
 	it("disposes best-effort when the resume throws", async () => {
 		const { agent, workspace, stub } = await heldWorkspaceAgent();
 		stub.resumeTurnLoop.mockRejectedValue(new Error("resume exploded"));
@@ -891,6 +907,18 @@ describe("Subagent — disposing a held workspace", () => {
 
 		expect(agent.status).toBe("error");
 		expect(workspace.dispose).toHaveBeenCalledWith({ status: "error", description: "run test" });
+	});
+
+	it("disposes a held workspace when a queued resume is cancelled", async () => {
+		const { agent, workspace, stub } = await heldWorkspaceAgent();
+		const limiter = new ConcurrencyLimiter(() => 0);
+		const run = agent.resume("the answer", { isBackground: true },
+			(thunk) => limiter.schedule(thunk, agent.abortController.signal));
+		agent.stopQueued();
+		await run;
+		expect(stub.resumeTurnLoop).not.toHaveBeenCalled();
+		expect(workspace.dispose).toHaveBeenCalledExactlyOnceWith({ status: "stopped", description: "run test" });
+		expect(agent.workspaceNotice).toBe(ADDENDUM);
 	});
 
 	it("disposes when the retention sweep releases the session", async () => {
@@ -1533,7 +1561,7 @@ describe("Subagent — ask-back", () => {
 
 		await agent.resume("The project one.");
 
-		expect(stub.resumeTurnLoop).toHaveBeenCalledWith("The project one.", undefined);
+		expect(stub.resumeTurnLoop).toHaveBeenCalledWith("The project one.", agent.abortController.signal);
 		expect(agent.status).toBe("completed");
 		expect(agent.result).toBe("Used the project config. Done.");
 		// The question was answered, so it no longer stands.
@@ -1562,13 +1590,14 @@ describe("Subagent.resume() — happy path", () => {
 		expect(agent.result).toBe("resumed");
 	});
 
-	it("passes the prompt and signal straight through to resumeTurnLoop", async () => {
+	it("passes the prompt and the current run controller to resumeTurnLoop", async () => {
 		const { agent, stub } = createResumableAgent();
 		const signal = new AbortController().signal;
-		await agent.resume("continue", signal);
+		await agent.resume("continue", { signal });
 		expect(stub.resumeTurnLoop).toHaveBeenCalledOnce();
 		expect(stub.resumeTurnLoop.mock.calls[0][0]).toBe("continue");
-		expect(stub.resumeTurnLoop.mock.calls[0][1]).toBe(signal);
+		expect(stub.resumeTurnLoop.mock.calls[0][1]).toBe(agent.abortController.signal);
+		expect(agent.abortController.signal).not.toBe(signal);
 	});
 
 	it("resets transition state before resuming", async () => {
@@ -1785,6 +1814,18 @@ describe("Subagent — provider failures reach the record", () => {
 });
 
 describe("Subagent.resume() — error handling", () => {
+	it("terminates and notifies when the start observer throws", async () => {
+		const onResumeFinished = vi.fn();
+		const { agent, stub } = createResumableAgent({ observer: {
+			onStarted: () => { throw new Error("observer failed"); }, onResumeFinished,
+		} });
+		await agent.resume("continue", { isBackground: true });
+		expect(stub.resumeTurnLoop).not.toHaveBeenCalled();
+		expect(agent.status).toBe("error");
+		expect(agent.error).toBe("observer failed");
+		expect(onResumeFinished).toHaveBeenCalledOnce();
+	});
+
 	it("transitions to error without throwing when resumeTurnLoop rejects", async () => {
 		const stub = createSubagentSessionStub();
 		stub.resumeTurnLoop.mockRejectedValue(new Error("resume exploded"));

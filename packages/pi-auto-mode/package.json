@@ -7,7 +7,8 @@
   "scripts": {
     "check": "tsc -p tsconfig.json",
     "test": "node --test test/*.test.mjs",
-    "test:integration": "node test/integration.mjs allow && node test/integration.mjs deny && node test/integration.mjs invalid && node test/integration.mjs allow write && node test/integration.mjs allow edit && node test/integration.mjs allow child-write && node test/integration.mjs allow large-write"
+    "test:integration": "node test/integration.mjs allow && node test/integration.mjs deny && node test/integration.mjs invalid && node test/integration.mjs stale-allow edit && node test/integration.mjs forbidden-allow edit && node test/integration.mjs allow write && node test/integration.mjs allow edit && node test/integration.mjs allow child-write && node test/integration.mjs allow subagent-input && node test/integration.mjs allow large-write && node test/integration.mjs allow evidence && node test/integration.mjs allow long-context && node test/integration.mjs allow long-context-child",
+    "test:live:luna": "node test/live-luna-redteam.mjs"
   },
   "dependencies": {
     "@gotgenes/pi-permission-system": "workspace:*",

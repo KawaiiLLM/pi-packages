@@ -65,6 +65,7 @@ All permissions use one of three states:
 | `ask`   | Prompts the user for confirmation via UI |
 
 When the dialog prompts, you can approve once or approve a pattern for the rest of the session.
+Direct and forwarded human prompts are queued per serving UI session, so concurrent requests cannot replace each other's dialogs; model reviewers still run independently. Cancelling a run or ending its session cancels the affected prompts without granting permission, and closes any active permission component.
 In an interactive TUI session the prompt is an inline keybind dialog — `y` approve, `s` approve for this session, `n` deny, `r` deny with a reason — where each hotkey arms and a second press confirms (configurable via `doublePressToConfirm`).
 A file-access ask that proves a single direction offers `b` as well, granting the session both directions instead of only the one the gate proved.
 The prompt shows one fact per line — who is asking, the tool, the matched rule, the value being decided — within a row budget, so a large tool input cannot take over the transcript; `Ctrl+O` (`app.tools.expand`) expands it to the complete request.
@@ -116,6 +117,12 @@ The useful grants are `*_read: allow` and the bare key; `*_write` earns its keep
 
 A read grant reaches bash commands too, not just the file tools: a redirect operator proves its destination's direction (`> out.txt` writes, `< in.txt` reads), and a frozen set of read-only command words — `cat`, `grep`, `ls`, `find`, and 17 others — proves a read for the paths they name.
 A token nothing proves still consults both directions, so an unrecognized command is never treated as the safer one.
+
+## Skill command consent
+
+A `/skill:name` input tagged by Pi as `interactive` or `rpc` grants permission for **that expansion only** when the skill policy is `ask`; the command is already the operator's request, so no model or confirmation dialog is needed. An explicit `deny` still blocks it. Extension-injected and missing/unknown-source inputs still escalate an `ask`. The existing review log records `user_approved` with `decidedBy.via` naming the input source, not a dialog; no session grant is created. Model reads of skill files and subsequent tool calls keep their independent checks.
+
+This trusts Pi's input-source metadata, not proof of the original keystrokes: earlier input transforms retain the source. SDK callers must mark delegated prompts `source: "extension"` (as this repository's subagents do for both initial runs and resumes), since Pi defaults an omitted source to `interactive`. In the bundled Pi version, direct RPC `steer`/`follow_up` calls do not pass through the `input` hook; this gate does not extend host coverage to those paths.
 
 ## Configuration
 

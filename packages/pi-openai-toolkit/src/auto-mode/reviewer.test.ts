@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { parseReviewVerdict, requestToolReview, type EvidenceTool, type ReviewerRegistry } from "./reviewer";
-import { buildReviewPrompt, reviewerSystemPrompt } from "./prompt";
+import { backfillVerdictFields, buildReviewPrompt, CLASSIFIER_SYSTEM_PROMPT, reviewerSystemPrompt } from "./prompt";
 import { MAX_REVIEW_INPUT_CHARS, MAX_REVIEW_REASON_CHARS } from "./types";
 
 const reviewerModel = {
@@ -119,6 +119,10 @@ describe("auto mode review prompt", () => {
 		expect(prompt).toContain("# Outcome policy");
 		expect(prompt).toContain("`risk_level` `critical` -> `deny`");
 		expect(prompt).toContain("Rules that prevent inflated risk");
+		expect(prompt).toContain("`user_authorization` `forbidden` -> `deny`, regardless of `risk_level`");
+		expect(prompt).toContain("Vague 'continue' or 'fix it' does not withdraw it");
+		expect(prompt).toContain("Only for a low-risk action allowed by the outcome policy");
+		expect(CLASSIFIER_SYSTEM_PROMPT).toContain("forbidden authorization");
 	});
 });
 
@@ -138,6 +142,24 @@ describe("parseReviewVerdict", () => {
 			outcome: "deny",
 			rationale: "too broad",
 		});
+	});
+
+	test("uses the last valid verdict when stale tool-call JSON precedes it", () => {
+		const staleToolText = [
+			'to=read code {"path":"/tmp/example.ts","offset":1,"limit":40}',
+			'to=grep code {"pattern":"brace \\} inside text","path":"/tmp"}',
+			'{"outcome":"allow"}',
+		].join(" ");
+		expect(parseReviewVerdict(staleToolText)).toMatchObject({ outcome: "allow" });
+		expect(parseReviewVerdict('{"outcome":"deny"} then {"outcome":"allow"}')).toMatchObject({ outcome: "allow" });
+		expect(parseReviewVerdict('{"tool":{"outcome":"allow"}}')).toBeUndefined();
+		expect(parseReviewVerdict(`${JSON.stringify({ note: 'escaped " quote \\ and [ { } ]' })} {"outcome":"allow"}`)).toMatchObject({ outcome: "allow" });
+		expect(parseReviewVerdict('[{"outcome":"allow"}]')).toBeUndefined();
+		expect(parseReviewVerdict('{ stale wrapper {"outcome":"allow"}')).toBeUndefined();
+		expect(parseReviewVerdict('[ stale wrapper {"outcome":"allow"}')).toBeUndefined();
+		expect(parseReviewVerdict('{"wrapper":] {"outcome":"allow"}}')).toBeUndefined();
+		expect(parseReviewVerdict('[broken} {"outcome":"allow"}')).toBeUndefined();
+		expect(parseReviewVerdict('{"outcome":"allow"} [broken')).toBeUndefined();
 	});
 
 	test("accepts the legacy decision/reason spelling so cached prompts still parse", () => {
@@ -169,6 +191,21 @@ describe("parseReviewVerdict", () => {
 		});
 	});
 
+	test("forbidden is a veto at every risk level, including contradictory and legacy allows", () => {
+		for (const riskLevel of ["low", "medium", "high", "critical"] as const) {
+			for (const outcome of ["allow", "deny"] as const) {
+				const result = parseReviewVerdict(JSON.stringify({ outcome, risk_level: riskLevel, user_authorization: "forbidden", rationale: "Model rationale" }));
+				expect(result).toMatchObject({ outcome: "deny", riskLevel, userAuthorization: "forbidden" });
+				expect(result?.rationale).toBe(outcome === "allow"
+					? "Reviewer identified an explicit user prohibition; contradictory approval was denied."
+					: "Model rationale");
+			}
+		}
+		expect(parseReviewVerdict('{"decision":"allow","userAuthorization":"FORBIDDEN"}')).toMatchObject({ outcome: "deny", userAuthorization: "forbidden" });
+		expect(backfillVerdictFields({ outcome: "allow", userAuthorization: "forbidden", maxRationaleChars: 30 })).toMatchObject({ outcome: "deny" });
+		expect(backfillVerdictFields({ outcome: "allow", userAuthorization: "forbidden", maxRationaleChars: 30 }).rationale.length).toBeLessThanOrEqual(30);
+	});
+
 	test("rejects unknown, missing, or non-verdict payloads instead of guessing", () => {
 		expect(parseReviewVerdict("")).toBeUndefined();
 		expect(parseReviewVerdict("allow it")).toBeUndefined();
@@ -196,6 +233,14 @@ describe("requestToolReview", () => {
 			},
 			reviewerModel: "uwoacrimson/gpt-5.6-sol",
 			evidenceRounds: 0,
+		});
+	});
+
+	test("a contradictory forbidden allow becomes a deny before leaving the reviewer", async () => {
+		const { registry } = createRegistry(assistantMessage('{"outcome":"allow","risk_level":"low","user_authorization":"forbidden","rationale":"Harmless read"}'));
+		expect(await review(registry)).toMatchObject({
+			kind: "deny",
+			verdict: { outcome: "deny", riskLevel: "low", userAuthorization: "forbidden" },
 		});
 	});
 

@@ -79,6 +79,15 @@ export class SubagentsServiceAdapter implements SubagentsService {
     return record ? toSubagentRecord(record) : undefined;
   }
 
+  async waitForResult(id: string, signal: AbortSignal): Promise<SubagentRecord | undefined> {
+    const record = this.manager.getRecord(id);
+    if (!record) return undefined;
+    record.claim();
+    await record.waitUntilSettled(signal);
+    if (!record.isActive()) record.markConsumed();
+    return toSubagentRecord(record);
+  }
+
   listAgents(): SubagentRecord[] {
     return this.manager.listAgents().map(toSubagentRecord);
   }

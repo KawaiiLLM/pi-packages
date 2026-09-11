@@ -165,6 +165,40 @@ function decisionOptionKeys(captured: { component?: CapturedComponent }) {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe("presentInlinePermissionPrompt", () => {
+  it("closes an active custom prompt on abort and removes its listener", async () => {
+    const { view, captured } = makeFakeView(false);
+    const controller = new AbortController();
+    view.signal = controller.signal;
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const promise = presentInlinePermissionPrompt(view, "Permission Required", makeAsk());
+    expect(captured.component).toBeDefined();
+    controller.abort();
+    expect((await promise).approved).toBe(false);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("does not mount an already cancelled prompt", async () => {
+    const { view, captured } = makeFakeView(false);
+    view.signal = AbortSignal.abort(new Error("cancelled"));
+    await expect(presentInlinePermissionPrompt(view, "Permission Required", makeAsk())).rejects.toThrow("cancelled");
+    expect(captured.component).toBeUndefined();
+  });
+
+  it("passes cancellation to RPC selects without opening a follow-up scope prompt after abort", async () => {
+    const controller = new AbortController();
+    const select = vi.fn(async (_title: string, _choices: string[], opts?: { signal?: AbortSignal }) => {
+      expect(opts?.signal).toBe(controller.signal);
+      controller.abort(new Error("cancelled"));
+      return "Yes, for this session";
+    });
+    const view = makeView("rpc", false, { select, input: vi.fn() });
+    view.signal = controller.signal;
+    await expect(requestPermissionDecision(view, "Permission Required", makeAsk(), {
+      sessionScope: { subagentLabel: "child", servingSessionLabel: "all" },
+    })).rejects.toThrow("cancelled");
+    expect(select).toHaveBeenCalledOnce();
+  });
+
   it("renders inline (not as an overlay) with the request facts and hotkey labels", () => {
     const { view, captured } = makeFakeView(true);
     void presentInlinePermissionPrompt(view, "Permission Required", ASK);

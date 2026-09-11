@@ -133,7 +133,8 @@ export class SubagentSession {
       : prompt;
 
     try {
-      await session.prompt(effectivePrompt);
+      // Delegated tasks are extension input, not direct user authorization.
+      await session.prompt(effectivePrompt, { source: "extension" });
       failIfProviderErrored(this.turnFailure.getFailure());
       this.meta.lifecycle.completed({
         sessionDir: this.meta.sessionDir,
@@ -153,12 +154,14 @@ export class SubagentSession {
 
   /** Re-prompt the same session (resume); does not emit `completed`. */
   async resumeTurnLoop(prompt: string, signal?: AbortSignal): Promise<string> {
+    // Do not start a fresh prompt after cancellation during resume admission.
+    signal?.throwIfAborted();
     const session = this._session;
     const collector = collectResponseText(session);
     const cleanupAbort = forwardAbortSignal(session, signal);
 
     try {
-      await session.prompt(prompt);
+      await session.prompt(prompt, { source: "extension" });
       failIfProviderErrored(this.turnFailure.getFailure());
     } finally {
       collector.unsubscribe();

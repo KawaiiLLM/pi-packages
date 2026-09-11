@@ -72,6 +72,79 @@ function makeDeps(
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe("LocalUserAuthorizer", () => {
+  it("serializes direct and forwarded dialogs without serializing other sessions", async () => {
+    const closers: Array<(decision: PermissionPromptDecision) => void> = [];
+    const { deps, decisionFn, events } = makeDeps({
+      requestPermissionDecision: vi.fn<typeof requestPermissionDecision>(() => new Promise(resolve => closers.push(resolve))),
+    });
+    const authorizer = new LocalUserAuthorizer(deps);
+    const first = authorizer.authorize(makeDetails({ requestId: "direct" }));
+    const second = authorizer.authorize(makeDetails({ requestId: "forwarded", forwarding: {
+      requesterAgentName: "worker", requesterSessionId: "child",
+    } }));
+    await vi.waitFor(() => expect(decisionFn).toHaveBeenCalledTimes(1));
+    expect(events.emit).toHaveBeenCalledTimes(1);
+    await new LocalUserAuthorizer(makeDeps().deps).authorize(makeDetails());
+    const allowed = { approved: true, state: "approved", decidedBy: DECIDED_BY_HUMAN } as const;
+    closers[0]!(allowed);
+    expect(await first).toEqual(allowed);
+    await vi.waitFor(() => expect(decisionFn).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(decisionFn).mock.calls[1]![1]).toBe("Permission Required (Subagent)");
+    closers[1]!({ approved: false, state: "denied", decidedBy: DECIDED_BY_HUMAN });
+    expect((await second).approved).toBe(false);
+  });
+
+  it("a rejected dialog does not poison the queue", async () => {
+    const fn = vi.fn<typeof requestPermissionDecision>()
+      .mockRejectedValueOnce(new Error("UI failed"))
+      .mockResolvedValue({ approved: true, state: "approved", decidedBy: DECIDED_BY_HUMAN });
+    const authorizer = new LocalUserAuthorizer(makeDeps({ requestPermissionDecision: fn }).deps);
+    const first = authorizer.authorize(makeDetails());
+    const second = authorizer.authorize(makeDetails());
+    await expect(first).rejects.toThrow("UI failed");
+    expect((await second).approved).toBe(true);
+  });
+
+  it("cancels a queued ask immediately without opening it or releasing the active dialog", async () => {
+    const activeRun = new AbortController();
+    const queuedRun = new AbortController();
+    let signal = activeRun.signal;
+    let close!: (decision: PermissionPromptDecision) => void;
+    const { deps, decisionFn, events } = makeDeps({
+      requestPermissionDecision: vi.fn<typeof requestPermissionDecision>(() => new Promise(resolve => { close = resolve; })),
+    });
+    const authorizer = new LocalUserAuthorizer({ ...deps, getSignal: () => signal });
+    const active = authorizer.authorize(makeDetails());
+    signal = queuedRun.signal;
+    const queued = authorizer.authorize(makeDetails());
+    await vi.waitFor(() => expect(decisionFn).toHaveBeenCalledTimes(1));
+    queuedRun.abort();
+    expect(await queued).toMatchObject({ approved: false, decidedBy: { kind: "unavailable" } });
+    expect(events.emit).toHaveBeenCalledTimes(1);
+    close({ approved: false, state: "denied", decidedBy: DECIDED_BY_HUMAN });
+    await active;
+    await Promise.resolve();
+    expect(decisionFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispose cancels active and queued asks and never accepts a late approval", async () => {
+    let close!: (decision: PermissionPromptDecision) => void;
+    const { deps, decisionFn } = makeDeps({
+      requestPermissionDecision: vi.fn<typeof requestPermissionDecision>(() => new Promise(resolve => { close = resolve; })),
+    });
+    const authorizer = new LocalUserAuthorizer(deps);
+    const active = authorizer.authorize(makeDetails());
+    const queued = authorizer.authorize(makeDetails());
+    await vi.waitFor(() => expect(decisionFn).toHaveBeenCalledTimes(1));
+    authorizer.dispose();
+    for (const result of await Promise.all([active, queued, authorizer.authorize(makeDetails())])) {
+      expect(result).toMatchObject({ approved: false, confirmationUnavailable: true });
+    }
+    close({ approved: true, state: "approved", decidedBy: DECIDED_BY_HUMAN });
+    await Promise.resolve();
+    expect(decisionFn).toHaveBeenCalledTimes(1);
+  });
+
   it("emits a UI prompt event with normalized surface and value", async () => {
     const { deps, events } = makeDeps();
     const authorizer = new LocalUserAuthorizer(deps);
@@ -126,7 +199,7 @@ describe("LocalUserAuthorizer", () => {
     await authorizer.authorize(details);
 
     expect(decisionFn).toHaveBeenCalledWith(
-      { mode: "tui", ui, ...makePromptPreferences() },
+      { mode: "tui", ui, ...makePromptPreferences(), signal: expect.any(AbortSignal) },
       "Permission Required",
       details.payload,
       undefined,
@@ -224,7 +297,7 @@ describe("LocalUserAuthorizer", () => {
       await authorizer.authorize(details);
 
       expect(decisionFn).toHaveBeenCalledWith(
-        { mode: "tui", ui, ...makePromptPreferences() },
+        { mode: "tui", ui, ...makePromptPreferences(), signal: expect.any(AbortSignal) },
         "Permission Required (Subagent)",
         details.payload,
         undefined,

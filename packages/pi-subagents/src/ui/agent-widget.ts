@@ -116,7 +116,8 @@ export class AgentWidget implements SubagentManagerObserver {
   // ---- SubagentManagerObserver: react to lifecycle, self-drive the timer ----
 
   /** A subagent started running — ensure the update loop is live and render. */
-  onSubagentStarted(_record: Subagent) {
+  onSubagentStarted(record: Subagent) {
+    this.finishedTurnAge.delete(record.id);
     this.startLoop();
   }
 
@@ -131,7 +132,8 @@ export class AgentWidget implements SubagentManagerObserver {
   }
 
   /** A subagent finished a resume — render so the refreshed result is shown. */
-  onSubagentResumed(_record: Subagent) {
+  onSubagentResumed(record: Subagent) {
+    this.finishedTurnAge.delete(record.id);
     this.update();
   }
 

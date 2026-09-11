@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
 	boundReviewText,
-	MAX_TRANSCRIPT_CHARS,
+	MAX_TRANSCRIPT_USER_CHARS,
 	MAX_TRANSCRIPT_ENTRY_CHARS,
 	MAX_TRANSCRIPT_RECENT_ENTRIES,
 	MAX_TRANSCRIPT_TOOL_CHARS,
@@ -67,58 +67,78 @@ function renderLine(index: number, line: TranscriptLine): string {
 }
 
 /**
- * Build a bounded transcript the way Codex's guardian does: user turns are the
- * anchors and are protected, tool and assistant evidence gets its own smaller
- * budget so verbose command output cannot crowd out the human conversation that
- * actually establishes authorization.
+ * Local deviation from Toolkit: split roles before imposing either quota. User
+ * messages come from the entire supplied context; other evidence gets a separate
+ * budget and entry cap. An assistant preceding a selected user message is given
+ * priority as referential context, never relabelled as user authorization.
  *
- * Selection order is newest-first, then rendered in chronological order.
+ * Count bounded, rendered lines (including labels/newlines), not raw text, so a
+ * long entry cannot exclude every later entry. Render in original chronology.
  */
 export function buildReviewTranscript(
 	lines: readonly TranscriptLine[],
 	budgets: {
-		maxTotalChars?: number;
+		maxUserChars?: number;
 		maxToolChars?: number;
 		maxRecentEntries?: number;
 	} = {},
 ): { text: string; omitted: boolean } {
-	const maxTotalChars = budgets.maxTotalChars ?? MAX_TRANSCRIPT_CHARS;
+	const maxUserChars = budgets.maxUserChars ?? MAX_TRANSCRIPT_USER_CHARS;
 	const maxToolChars = budgets.maxToolChars ?? MAX_TRANSCRIPT_TOOL_CHARS;
 	const maxRecentEntries = budgets.maxRecentEntries ?? MAX_TRANSCRIPT_RECENT_ENTRIES;
-
-	const recent = lines.slice(-Math.max(1, maxRecentEntries));
-	const omitted = recent.length < lines.length;
+	for (const budget of [maxUserChars, maxToolChars, maxRecentEntries]) {
+		if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError("Transcript budgets must be non-negative integers");
+	}
 
 	const userLines: number[] = [];
 	const otherLines: number[] = [];
-	recent.forEach((line, index) => {
-		if (line.role === "user") userLines.push(index);
-		else otherLines.push(index);
+	const precedingAssistant = new Map<number, number>();
+	let lastAssistant: number | undefined;
+	lines.forEach((line, index) => {
+		if (line.role === "user") {
+			userLines.push(index);
+			if (lastAssistant !== undefined) precedingAssistant.set(index, lastAssistant);
+		} else {
+			otherLines.push(index);
+			if (line.role === "assistant") lastAssistant = index;
+		}
 	});
-
+	const renderedLines = lines.map((line, index) => renderLine(index + 1, line));
 	const selected = new Set<number>();
 	let userChars = 0;
-	// The first user turn carries the task; the latest carries the immediate ask.
-	for (const index of [userLines[0]!, userLines[userLines.length - 1]!, ...userLines.slice(1, -1).reverse()]) {
+	// Keep the current instruction and original task, then other users newest-first.
+	const userPriority = [userLines.at(-1), userLines[0], ...userLines.slice(1, -1).reverse()];
+	for (const index of userPriority) {
 		if (index === undefined || selected.has(index)) continue;
-		const cost = recent[index]!.text.length;
-		if (userChars + cost > maxTotalChars) break;
+		const cost = renderedLines[index]!.length + 1;
+		if (userChars + cost > maxUserChars) continue;
 		selected.add(index);
 		userChars += cost;
 	}
 
+	const notice = `${TRUNCATION_MARKER} conversation entries or text were omitted.`;
+	// Reserve notice space inside the other pool, never borrow from the user pool.
+	const noticeCost = notice.length + 1;
+	const otherBudget = Math.max(0, maxToolChars - noticeCost);
+	const contextPriority = [...selected].sort((a, b) => b - a)
+		.map(index => precedingAssistant.get(index)).filter((index): index is number => index !== undefined);
 	let toolChars = 0;
-	for (const index of [...otherLines].reverse()) {
-		const cost = recent[index]!.text.length;
-		if (toolChars + cost > maxToolChars) continue;
-		if (userChars + toolChars + cost > maxTotalChars) continue;
+	let otherCount = 0;
+	for (const index of [...contextPriority, ...otherLines.slice(-maxRecentEntries).reverse()]) {
+		if (otherCount >= maxRecentEntries) break;
+		if (selected.has(index)) continue;
+		const cost = renderedLines[index]!.length + 1;
+		if (toolChars + cost > otherBudget) continue;
 		selected.add(index);
 		toolChars += cost;
+		otherCount++;
 	}
 
 	const ordered = [...selected].sort((a, b) => a - b);
-	const rendered = ordered.map((index) => renderLine(index + 1, recent[index]!));
-	if (omitted) rendered.unshift(`${TRUNCATION_MARKER} earlier conversation entries were omitted.`);
+	const omitted = selected.size < lines.length || ordered.some(index =>
+		boundReviewText(lines[index]!.text, MAX_TRANSCRIPT_ENTRY_CHARS) !== lines[index]!.text);
+	const rendered = ordered.map(index => renderedLines[index]!);
+	if (omitted && noticeCost <= maxToolChars) rendered.unshift(notice);
 	return { text: rendered.join("\n"), omitted };
 }
 

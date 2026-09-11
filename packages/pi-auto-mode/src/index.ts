@@ -6,6 +6,15 @@ import { getSubagentsService, type SubagentsService } from "@gotgenes/pi-subagen
 import { waitForReview } from "./review.mjs";
 import { buildReviewRequest, fullActionEvidence } from "./evidence.mjs";
 import { reviewerSystemPrompt } from "./vendor/toolkit/prompt.ts";
+import {
+  assertReviewerDefinition,
+  boundEvidenceResult,
+  EVIDENCE_TOOL_NAMES,
+  REVIEW_MAX_TURNS,
+  SUBAGENT_SOFT_LIMIT,
+  reviewerToolPolicy,
+  reviewerToolsForTurn,
+} from "./reviewer-guard.mjs";
 
 const AGENT = "approver";
 const NAME = "model-approver";
@@ -31,9 +40,7 @@ async function reviewerDefinition(ctx: ExtensionContext) {
       definition = frontmatter;
     }
   }
-  if (!definition || definition.tools !== "none" || definition.enabled === false) {
-    throw new Error("A valid approver.md with tools: none is required");
-  }
+  assertReviewerDefinition(definition);
   return definition;
 }
 
@@ -45,6 +52,7 @@ export default function (pi: ExtensionAPI) {
   let lifetime = new AbortController();
   let task = "";
   let reviewerMode = false;
+  let reviewerTurnIndex = 0;
   const active = new Map<string, SubagentsService>();
 
   const authorize: Authorizer["authorize"] = async (details, _query, log) => {
@@ -65,9 +73,11 @@ export default function (pi: ExtensionAPI) {
       const request = buildReviewRequest(ctx.sessionManager.buildContextEntries(), details, ctx.cwd);
       const signal = AbortSignal.any([runLifetime.signal, AbortSignal.timeout(DEADLINE_MS), ...(ctx.signal ? [ctx.signal] : [])]);
       signal.throwIfAborted();
+      // pi-subagents' maxTurns is a soft threshold that queues a wrap-up turn.
+      // Keep that fallback beyond the exact four-turn boundary enforced below.
       childId = agents.spawn(AGENT,
         REVIEW_PREFIX + request,
-        { description: "Permission review", foreground: true, bypassQueue: true, inheritContext: false, maxTurns: 2 });
+        { description: "Permission review", foreground: true, bypassQueue: true, inheritContext: false, maxTurns: SUBAGENT_SOFT_LIMIT });
       active.set(childId, agents);
       log.review("model_approver.started", { requestId: details.requestId, childId });
       const result = await waitForReview(agents, childId, signal);
@@ -100,8 +110,11 @@ export default function (pi: ExtensionAPI) {
     const permissions = getPermissionsService(context.sessionManager.getSessionId());
     if (!permissions) return;
     // Install on child nodes as well; permissions forwards the resulting payload.
+    // Write/edit need their exact changes, and subagent needs its complete task
+    // instead of the permission system's generic 200-character preview. Toolkit
+    // still applies the shared 8,000-character action-input bound downstream.
     // Do not overwrite another extension's custom formatter.
-    for (const tool of ["write", "edit"]) {
+    for (const tool of ["write", "edit", "subagent"]) {
       if (!permissions.getToolInputFormatter(tool)) {
         formatterDisposers.push(permissions.registerToolInputFormatter(tool, fullActionEvidence));
       }
@@ -123,18 +136,45 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", (event, ctx) => {
     if (event.prompt.startsWith(REVIEW_PREFIX) || isReviewer(event.systemPrompt)) {
       reviewerMode = true;
-      // tools:none already removes capability tools. Also remove communication
-      // tools so a reviewer cannot ask back while the parent is awaiting it.
-      pi.setActiveTools([]);
-      // Reuse Toolkit's policy verbatim. No investigation suffix: this child has
-      // no tools. Keep policy in source, not a separately maintained prompt copy.
-      return { systemPrompt: `${event.systemPrompt}\n\n${reviewerSystemPrompt(false)}` };
+      reviewerTurnIndex = 0;
+      // The agent definition is only the first boundary. Strip the core's
+      // communication tools and any extension tools again before the first call.
+      pi.setActiveTools([...EVIDENCE_TOOL_NAMES]);
+      // Reuse Toolkit's evidence-enabled policy verbatim. As in Toolkit, the
+      // same prompt remains in force when the final request omits tool schemas.
+      return { systemPrompt: `${event.systemPrompt}\n\n${reviewerSystemPrompt(true)}` };
     }
     context = ctx;
     task = event.prompt;
   });
-  pi.on("tool_call", (_event, ctx) => {
-    if (reviewerMode || isReviewer(ctx.getSystemPrompt())) return { block: true, reason: "Approval agents cannot execute tools" };
+  pi.on("turn_start", (event, ctx) => {
+    if (!reviewerMode && !isReviewer(ctx.getSystemPrompt())) return;
+    reviewerMode = true;
+    reviewerTurnIndex = event.turnIndex;
+    pi.setActiveTools(reviewerToolsForTurn(event.turnIndex));
+    // maxTurns is a graceful subagent limit, not a hard provider-call cap. This
+    // defensive stop makes a fifth model turn impossible if another component
+    // somehow schedules one after the forced final turn.
+    if (event.turnIndex >= REVIEW_MAX_TURNS) ctx.abort();
+  });
+  pi.on("turn_end", (event, ctx) => {
+    if (!reviewerMode && !isReviewer(ctx.getSystemPrompt())) return;
+    // Pi snapshots tools for the next provider request before emitting that
+    // turn's turn_start. Remove them at the end of investigation turn three so
+    // the immediately following (fourth) model request is actually tool-free.
+    if (event.turnIndex === REVIEW_MAX_TURNS - 2) pi.setActiveTools([]);
+  });
+  pi.on("tool_call", (event, ctx) => {
+    if (!reviewerMode && !isReviewer(ctx.getSystemPrompt())) return;
+    // This runtime check is authoritative: project agent frontmatter and child
+    // communication tools cannot widen the reviewer's capability surface.
+    return reviewerToolPolicy(event.toolName, reviewerTurnIndex);
+  });
+  pi.on("tool_result", (event, ctx) => {
+    if (!reviewerMode && !isReviewer(ctx.getSystemPrompt())) return;
+    // Match Toolkit's evidence-loop result projection and 4,000/1,000-character
+    // success/error bounds before the next reviewer request sees the evidence.
+    return { content: [{ type: "text", text: boundEvidenceResult(event.content, event.isError) }] };
   });
   pi.on("session_shutdown", () => {
     lifetime.abort(new Error("Parent session ended"));
@@ -147,5 +187,7 @@ export default function (pi: ExtensionAPI) {
     context = undefined;
     service = undefined;
     task = "";
+    reviewerMode = false;
+    reviewerTurnIndex = 0;
   });
 }

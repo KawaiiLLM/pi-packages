@@ -70,6 +70,8 @@ export interface TerminalAuthorizer {
   authorize(
     details: PromptPermissionDetails,
   ): Promise<PermissionPromptDecision>;
+  /** End any active or queued human interaction when its session is replaced. */
+  dispose?(): void;
 }
 
 /**
@@ -133,6 +135,7 @@ export function selectAuthorizer(
       terminal: new LocalUserAuthorizer({
         ui: ctx.ui,
         mode: ctx.mode,
+        getSignal: () => ctx.signal,
         events: deps.events,
         getPromptPreferences: deps.getPromptPreferences,
         requestPermissionDecision: deps.requestPermissionDecision,

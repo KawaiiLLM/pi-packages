@@ -7,7 +7,7 @@ import { buildReviewPrompt } from "../src/vendor/toolkit/prompt.ts";
 const message = (id, role, content) => ({ id, type: "message", message: { role, content } });
 const details = (input) => ({ toolName: "write", payload: { request: { toolName: "write", surface: "write" }, evidence: [{ label: "input", text: fullActionEvidence(input) }] } });
 
-test("uses Toolkit transcript and prompt functions without extra framing or limits", () => {
+test("uses the local transcript selection with unchanged Toolkit prompt framing", () => {
   const entries = [message("u", "user", "Implement the requested change"), message("a", "assistant", "Plan")];
   const input = { path: "a", content: "hello" };
   assert.equal(buildReviewRequest(entries, details(input), "/repo"), buildReviewPrompt({ transcript: transcriptFromEntries(entries).text, toolName: "write", toolInput: input, cwd: "/repo" }));
@@ -19,6 +19,24 @@ test("write larger than 64 KiB is passed through Toolkit's 8000-character trunca
   const prompt = buildReviewRequest([], details(input), "/repo");
   assert.equal(prompt, buildReviewPrompt({ transcript: "", toolName: "write", toolInput: input, cwd: "/repo" }));
   assert.ok(!prompt.includes("TAIL_MARKER"));
+  assert.ok(prompt.includes("..."));
+});
+
+test("subagent tasks bypass the generic 200-character preview and use Toolkit's action bound", () => {
+  const input = {
+    subagent_type: "general-purpose",
+    description: "Continue approved work",
+    prompt: "x".repeat(3_800) + "TASK_TAIL",
+    run_in_background: true,
+  };
+  const request = { toolName: "subagent", payload: { request: { toolName: "subagent", surface: "subagent" }, evidence: [{ label: "input", text: fullActionEvidence(input) }] } };
+  assert.deepEqual(toolInputFromPermission(request), input);
+  assert.ok(buildReviewRequest([], request, "/repo").includes("TASK_TAIL"));
+
+  const oversized = { ...input, prompt: "x".repeat(20_000) + "OVERSIZED_TAIL" };
+  const oversizedRequest = { ...request, payload: { ...request.payload, evidence: [{ label: "input", text: fullActionEvidence(oversized) }] } };
+  const prompt = buildReviewRequest([], oversizedRequest, "/repo");
+  assert.ok(!prompt.includes("OVERSIZED_TAIL"));
   assert.ok(prompt.includes("..."));
 });
 

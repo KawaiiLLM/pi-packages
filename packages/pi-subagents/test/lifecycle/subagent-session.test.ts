@@ -220,7 +220,7 @@ describe("SubagentSession — runTurnLoop response capture", () => {
     const { session } = createSession("DONE");
     const { sub } = makeSubagentSession(session, { parentContext: "CTX\n" });
     await sub.runTurnLoop("the task", {});
-    expect(session.prompt).toHaveBeenCalledWith("CTX\nthe task");
+    expect(session.prompt).toHaveBeenCalledWith("CTX\nthe task", { source: "extension" });
   });
 });
 
@@ -442,11 +442,20 @@ describe("SubagentSession — runTurnLoop provider failures", () => {
 });
 
 describe("SubagentSession — resumeTurnLoop", () => {
+  it("does not prompt or add listeners when cancellation preceded resume", async () => {
+    const { session, listeners } = createSession("unused");
+    const { sub } = makeSubagentSession(session);
+    const before = listeners.length;
+    await expect(sub.resumeTurnLoop("continue", AbortSignal.abort(new Error("cancelled")))).rejects.toThrow("cancelled");
+    expect(session.prompt).not.toHaveBeenCalled();
+    expect(listeners).toHaveLength(before);
+  });
+
   it("re-prompts the session and returns the final assistant text", async () => {
     const { session } = createSession("RESUMED");
     const { sub } = makeSubagentSession(session);
     const text = await sub.resumeTurnLoop("Continue");
-    expect(session.prompt).toHaveBeenCalledWith("Continue");
+    expect(session.prompt).toHaveBeenCalledWith("Continue", { source: "extension" });
     expect(text).toBe("RESUMED");
   });
 

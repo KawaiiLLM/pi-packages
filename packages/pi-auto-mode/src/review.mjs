@@ -9,23 +9,13 @@ export function parseVerdict(text) {
 
 export async function waitForReview(service, id, signal) {
   try {
-    while (true) {
-      signal.throwIfAborted();
-      const record = service.getRecord(id);
-      if (!record) throw new Error("Reviewer session disappeared");
-      if (!["queued", "running"].includes(record.status)) {
-        if (record.status !== "completed" || record.pendingQuestion || record.toolUses !== 0) {
-          throw new Error(`Reviewer did not complete without tools: ${record.status}`);
-        }
-        return { record, verdict: parseVerdict(record.result) };
-      }
-      await new Promise((resolve, reject) => {
-        const abort = () => { clearTimeout(timer); reject(signal.reason); };
-        const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, 100);
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted) abort();
-      });
+    const record = await service.waitForResult(id, signal);
+    signal.throwIfAborted();
+    if (!record) throw new Error("Reviewer session disappeared");
+    if (record.status !== "completed" || record.pendingQuestion) {
+      throw new Error(`Reviewer did not complete with a final verdict: ${record.status}`);
     }
+    return { record, verdict: parseVerdict(record.result) };
   } catch (error) {
     service.abort(id);
     throw error;

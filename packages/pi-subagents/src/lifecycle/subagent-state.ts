@@ -103,10 +103,8 @@ export class SubagentState {
 
 	// Result delivery — whether a carrier has committed to delivering the outcome.
 	// Distinct from consumption in two ways. It is revocable, where consumption is
-	// a one-way latch that also times session retention. And it is scoped to the
-	// caller rather than the run: consumedAt records a delivery that has already
-	// happened, so a resume must clear it, while a claim records one that has not
-	// happened yet and stays live across the reset (see resetForResume).
+	// a one-way latch that also times session retention. Both are scoped to one
+	// run: resume clears old ownership before its new carrier claims delivery.
 	// Transient runtime ownership, so deliberately not seedable via
 	// SubagentStateInit — a rehydrated record must not claim a carrier that no
 	// longer exists.
@@ -353,13 +351,16 @@ export class SubagentState {
 	 * Reset for resume: running status, new startedAt, clear
 	 * completedAt/result/error/consumedAt.
 	 *
-	 * The carrier claim deliberately survives: it belongs to the caller that asked
-	 * for the resume and will deliver its outcome, not to the run being reset.
-	 * Clearing it here would drop the claim before the caller could observe it,
-	 * since this runs synchronously before resume() returns.
+	 * Delivery ownership belongs to the new run, not the previous caller.
+	 * The resume lifecycle installs its new claim after this reset, before work.
 	 */
-	resetForResume(startedAt: number): void {
-		this._status = "running";
+	resetForResume(startedAt: number, status: "running" | "queued" = "running"): void {
+		this._status = status;
+		this._claimed = false;
+		this._stoppedWhileQueued = false;
+		this._workspaceNotice = undefined;
+		this._responseText = "";
+		this._activeTools.clear();
 		this._startedAt = startedAt;
 		this._completedAt = undefined;
 		this._result = undefined;

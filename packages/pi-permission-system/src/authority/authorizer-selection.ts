@@ -72,6 +72,7 @@ export class AuthorizerSelection
   implements AskEscalator, AuthorizerSelectionLifecycle, AdjudicationRole
 {
   private authority: SelectedAuthority | null = null;
+  private uiSession: { id: string; mode: ExtensionContext["mode"] } | undefined;
 
   constructor(
     private readonly deps: AuthorizerSelectionDeps & {
@@ -92,7 +93,14 @@ export class AuthorizerSelection
    * activation, so link resolution is deferred to the session's first ask.
    */
   activate(ctx: ExtensionContext): void {
+    // PermissionSession refreshes activation on tool events too. Preserve the
+    // same local terminal (and its queue) until the UI session actually changes.
+    const id = ctx.hasUI ? ctx.sessionManager.getSessionId?.() : undefined;
+    if (ctx.hasUI && typeof id === "string" &&
+        this.uiSession?.id === id && this.uiSession.mode === ctx.mode) return;
+    this.deactivate();
     this.authority = selectAuthorizer(ctx, this.deps);
+    if (ctx.hasUI && typeof id === "string") this.uiSession = { id, mode: ctx.mode };
   }
 
   /**
@@ -181,7 +189,9 @@ export class AuthorizerSelection
 
   /** Clear the stored selection. */
   deactivate(): void {
+    this.authority?.terminal.dispose?.();
     this.authority = null;
+    this.uiSession = undefined;
   }
 
   /**

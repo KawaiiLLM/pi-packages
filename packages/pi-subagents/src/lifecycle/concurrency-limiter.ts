@@ -20,10 +20,13 @@ export class ConcurrencyLimiter {
 	 * Returns a promise that settles with the task, or resolves early if the
 	 * task is dropped by clear() before it starts.
 	 */
-	schedule(task: () => Promise<void>): Promise<void> {
+	schedule(task: () => Promise<void>, signal?: AbortSignal): Promise<void> {
+		if (signal?.aborted) return Promise.resolve();
 		const { promise, resolve, reject } = Promise.withResolvers<void>(); // eslint-disable-line @typescript-eslint/no-invalid-void-type -- Promise.withResolvers<void> is valid; rule does not allow void in generic fn call type args
-		this.pending.push({
+		const detach = () => signal?.removeEventListener("abort", cancel);
+		const entry = {
 			start: () => {
+				detach(); // Running work owns cancellation; the slot lasts until it settles.
 				this.active++;
 				task()
 					.then(resolve, reject)
@@ -32,8 +35,16 @@ export class ConcurrencyLimiter {
 						this.recheck();
 					});
 			},
-			settle: resolve,
-		});
+			settle: () => { detach(); resolve(); },
+		};
+		const cancel = () => {
+			const index = this.pending.indexOf(entry);
+			if (index === -1) return;
+			this.pending.splice(index, 1);
+			entry.settle();
+		};
+		signal?.addEventListener("abort", cancel, { once: true });
+		this.pending.push(entry);
 		this.recheck();
 		return promise;
 	}

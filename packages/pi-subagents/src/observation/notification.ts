@@ -213,7 +213,7 @@ export interface WorkspaceNoticeDetails {
  * updates are two distinct facts and both survive.
  */
 type PendingAnnouncement =
-  | { kind: "completion"; record: Subagent }
+  | { kind: "completion"; record: Subagent; run: AbortController }
   | { kind: "update"; record: Subagent; message: string };
 
 export class NotificationManager implements NotificationSystem {
@@ -266,7 +266,7 @@ export class NotificationManager implements NotificationSystem {
    * fact told again, not a later one.
    */
   private withholdCompletion(record: Subagent): void {
-    const entry: PendingAnnouncement = { kind: "completion", record };
+    const entry: PendingAnnouncement = { kind: "completion", record, run: record.abortController };
     const existing = this.pending.findIndex(
       (queued) => queued.kind === "completion" && queued.record.id === record.id,
     );
@@ -342,7 +342,9 @@ export class NotificationManager implements NotificationSystem {
     for (const entry of withheld) {
       try {
         if (entry.kind === "update") this.emitUpdate(entry.record, entry.message);
-        else this.emitIndividualNudge(entry.record);
+        // A record can be resumed and stopped again before this flush. Its old
+        // completion still belongs to the old run, even if status is terminal.
+        else if (entry.run === entry.record.abortController) this.emitIndividualNudge(entry.record);
       } catch (err) {
         debugLog("notification render", err);
       }
@@ -373,6 +375,9 @@ export class NotificationManager implements NotificationSystem {
   }
 
   private emitIndividualNudge(record: Subagent): void {
+    // Pending completions hold live records. A resume can reset that record
+    // before the parent flushes the previous completion; it is not done now.
+    if (record.isActive()) return;
     if (record.claimed) return;
     if (record.consumed) return;
 

@@ -24,6 +24,8 @@ describe("asDecisionSource", () => {
     const variants: readonly DecisionSource[] = [
       { kind: "user", via: "dialog" },
       { kind: "user", via: "select" },
+      { kind: "user", via: "interactive" },
+      { kind: "user", via: "rpc" },
       {
         kind: "authorizer",
         name: "model-judge",

@@ -2,7 +2,7 @@ import { backfillVerdictFields } from "./prompt.ts";
 import type { GuardianVerdict, RiskLevel, UserAuthorization } from "./types.ts";
 
 const RISK_LEVELS: readonly string[] = ["low", "medium", "high", "critical"];
-const AUTHORIZATIONS: readonly string[] = ["unknown", "low", "medium", "high"];
+const AUTHORIZATIONS: readonly string[] = ["forbidden", "unknown", "low", "medium", "high"];
 
 /**
  * Parse a reviewer answer. Only the outcome is required; risk, authorization, and
@@ -48,11 +48,45 @@ export function parseReviewVerdict(text: string): GuardianVerdict | undefined {
 
 function candidateJsonObjects(text: string): string[] {
 	const candidates: string[] = [];
-	const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-	if (fenced?.[1]) candidates.push(fenced[1].trim());
-	candidates.push(text.trim());
-	const brace = text.match(/\{[\s\S]*\}/);
-	if (brace?.[0]) candidates.push(brace[0]);
-	return candidates;
+	let start = -1;
+	const stack: Array<"{" | "["> = [];
+	let quoted = false;
+	let escaped = false;
+
+	for (let index = 0; index < text.length; index++) {
+		const char = text[index];
+		if (quoted) {
+			if (escaped) escaped = false;
+			else if (char === "\\") escaped = true;
+			else if (char === '"') quoted = false;
+			continue;
+		}
+		if (char === '"' && stack.length > 0) quoted = true;
+		else if (char === "{" || char === "[") {
+			if (char === "{" && stack.length === 0) start = index;
+			stack.push(char);
+		} else if (char === "}" || char === "]") {
+			const opening = char === "}" ? "{" : "[";
+			if (stack.at(-1) !== opening) {
+				// Once a started JSON-like container becomes malformed, its true
+				// boundary is unknowable. Do not reinterpret a later nested verdict
+				// as top-level; fail the whole completion closed instead.
+				if (stack.length > 0) return [];
+				continue;
+			}
+			stack.pop();
+			if (stack.length === 0) {
+				if (char === "}" && start >= 0) candidates.push(text.slice(start, index + 1));
+				start = -1;
+			}
+		}
+	}
+
+	if (stack.length > 0) return [];
+
+	// The reviewer may serialize stale tool-call text before its final answer.
+	// Prefer the last valid verdict object, but still validate every candidate
+	// through JSON.parse and the strict allow/deny contract above.
+	return candidates.reverse();
 }
 

@@ -17,6 +17,7 @@ export class RunListeners {
 	 */
 	wireSignal(signal: AbortSignal | undefined, onAbort: () => void): void {
 		if (!signal) return;
+		if (signal.aborted) { onAbort(); return; }
 		const listener = () => onAbort();
 		signal.addEventListener("abort", listener, { once: true });
 		this.detach = () => signal.removeEventListener("abort", listener);

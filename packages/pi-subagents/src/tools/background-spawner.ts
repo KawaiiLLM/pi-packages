@@ -26,7 +26,7 @@ export function spawnBackground(
   manager: BackgroundManagerDeps,
   params: BackgroundParams,
 ) {
-  const { identity, execution, presentation, notes } = params.config;
+  const { identity, execution } = params.config;
 
   let id: string;
   try {
@@ -45,8 +45,17 @@ export function spawnBackground(
     return textResult(err instanceof Error ? err.message : String(err));
   }
 
-  const record = manager.getRecord(id);
+  return backgroundResult(id, manager.getRecord(id), params.config, params.settings);
+}
 
+/** Shared acknowledgement for a background spawn or resumed run. */
+export function backgroundResult(
+  id: string,
+  record: Subagent | undefined,
+  config: ResolvedSpawnConfig,
+  settings: { readonly maxConcurrent: number },
+) {
+  const { identity, execution, presentation, notes } = config;
   const isQueued = record?.status === "queued";
   return textResult(
     renderSpawnNotes(notes) +
@@ -56,7 +65,7 @@ export function spawnBackground(
       `Description: ${execution.description}\n` +
       (record?.outputFile ? `Output file: ${record.outputFile}\n` : "") +
       (isQueued
-        ? `Position: queued (max ${params.settings.maxConcurrent} concurrent)\n`
+        ? `Position: queued (max ${settings.maxConcurrent} concurrent)\n`
         : "") +
       `\nYou will be notified when this agent completes.\n` +
       `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +

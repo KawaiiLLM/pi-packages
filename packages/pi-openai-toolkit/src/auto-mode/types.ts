@@ -27,8 +27,8 @@ export const TRUNCATION_MARKER = "<truncated />";
 /** Risk of the planned action itself, as scored by the reviewer. */
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
-/** How far the observed conversation actually authorizes that action. */
-export type UserAuthorization = "unknown" | "low" | "medium" | "high";
+/** Authorization strength, or an explicit user prohibition (a veto, not a score). */
+export type UserAuthorization = "forbidden" | "unknown" | "low" | "medium" | "high";
 
 /**
  * Why a review could not be completed. Kept separate from `deny` on purpose: an

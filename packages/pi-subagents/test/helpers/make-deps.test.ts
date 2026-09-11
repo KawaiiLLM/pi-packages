@@ -19,7 +19,7 @@ describe("createToolDeps", () => {
 
 		it("resume resolves to a completed record", async () => {
 			const { manager } = createToolDeps();
-			const record = await manager.resume("id-1", "prompt", new AbortController().signal);
+			const record = await manager.resume("id-1", "prompt", { signal: new AbortController().signal });
 			expect(record?.status).toBe("completed");
 		});
 

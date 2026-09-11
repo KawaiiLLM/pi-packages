@@ -13,7 +13,7 @@ import { debugLog } from "#src/debug";
 import type { ConcurrencyLimiter } from "#src/lifecycle/concurrency-limiter";
 import type { CreateSubagentSessionParams } from "#src/lifecycle/create-subagent-session";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
-import { Subagent, type SubagentLifecycleObserver } from "#src/lifecycle/subagent";
+import { type ResumeOptions, Subagent, type SubagentLifecycleObserver } from "#src/lifecycle/subagent";
 import type { SubagentSession } from "#src/lifecycle/subagent-session";
 import { SubagentState } from "#src/lifecycle/subagent-state";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
@@ -343,7 +343,7 @@ export class SubagentManager {
       // Schedule on the limiter — scheduleVia captures the limiter promise
       // eagerly, so a queued agent is awaitable from spawn; guardedRun guards
       // against abort-while-queued when the slot frees.
-      record.scheduleVia((thunk) => this.limiter.schedule(thunk));
+      record.scheduleVia((thunk) => this.limiter.schedule(thunk, record.abortController.signal));
       return id;
     }
 
@@ -353,16 +353,28 @@ export class SubagentManager {
 
   /**
    * Resume an existing agent session with a new prompt.
-   * Delegates to Subagent.resume(), which owns the observer subscription lifecycle.
+   * Foreground resumes wait and claim delivery; background resumes return at
+   * admission and share the spawn limiter. The record owns per-run reset/wiring.
    */
   async resume(
     id: string,
     prompt: string,
-    signal?: AbortSignal,
+    options: ResumeOptions = {},
   ): Promise<Subagent | undefined> {
     const agent = this.agents.get(id);
-    if (!agent?.isSessionReady()) return undefined;
-    await agent.resume(prompt, signal);
+    if (!agent || agent.resumeRefusal) return undefined;
+    const run = agent.resume(
+      prompt,
+      options,
+      options.isBackground ? (thunk) => this.limiter.schedule(thunk, agent.abortController.signal) : undefined,
+    );
+    if (options.isBackground) {
+      // Queue admission is synchronous. Keep a rejected lifecycle observable
+      // without leaving an unhandled background promise.
+      void run.catch((err) => debugLog("background resume", err));
+    } else {
+      await run;
+    }
     return agent;
   }
 

@@ -62,7 +62,7 @@ const STATUS_MEANINGS: Partial<Record<SubagentStatus, StatusMeaning>> = {
  * that continues someone else's sentence is different grammar, not a different
  * fact — the split `STATUS_MEANINGS` makes between `label` and `detail`.
  */
-const RESUME_REFUSAL_CLAUSES: Record<ResumeRefusal, string> = {
+const RESUME_REFUSAL_CLAUSES: Record<Exclude<ResumeRefusal, "active">, string> = {
 	// Deliberately not "...no session to resume": the clause is followed by a
 	// colon, and "resume:" is the exact token the parent must not see here.
 	"no-session": "it has no active session",
@@ -126,6 +126,10 @@ export function renderQuestionAffordance(
 		.split("\n")
 		.map((line) => `  ${line}`)
 		.join("\n");
+	if (refusal === "active") {
+		return `\n\nThis agent recorded a question, but its current run has not settled:\n\n${quoted}\n\n` +
+			"Wait for it to settle before answering, or use steer_subagent while it is running.";
+	}
 	if (refusal) {
 		return (
 			"\n\nThis agent ended its run with a question that can no longer be answered \u2014 " +

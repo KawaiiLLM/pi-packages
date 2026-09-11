@@ -1,4 +1,7 @@
+import type { InputSource } from "@earendil-works/pi-coding-agent";
+import { renderReviewLogFacts } from "#src/presentation/review-log-renderer";
 import type { PermissionCheckResult } from "#src/types";
+import { buildDecisionEvent } from "./helpers";
 import type { GateRunner } from "./runner";
 import { describeSkillInputGate } from "./skill-input";
 import type { GateOutcome } from "./types";
@@ -58,6 +61,7 @@ export class SkillInputGatePipeline {
     agentName: string | null,
     notifier: GateNotifier,
     runner: GateRunner,
+    inputSource?: InputSource,
   ): Promise<GateOutcome> {
     const check = this.inputs.checkPermission(
       "skill",
@@ -67,10 +71,39 @@ export class SkillInputGatePipeline {
     if (check.state === "deny") {
       notifier.warn(formatSkillDenyNotice(skillName, agentName));
     }
-    return runner.run(
-      describeSkillInputGate(skillName, agentName, check),
-      agentName,
-    );
+    const gate = describeSkillInputGate(skillName, agentName, check);
+    gate.logContext.inputSource = inputSource ?? "unknown";
+    // A user-origin command is consent to this expansion, not a standing grant.
+    // Trust Pi's source tag, not UI availability; injected/unknown inputs still
+    // escalate. Pi transforms retain source, so this does not attest raw text.
+    if (
+      check.state === "ask" &&
+      (inputSource === "interactive" || inputSource === "rpc")
+    ) {
+      return runner.run(
+        {
+          action: "allow",
+          decidedBy: { kind: "user", via: inputSource },
+          log: {
+            event: "permission_request.user_approved",
+            details: {
+              ...gate.logContext,
+              ...renderReviewLogFacts(gate.payload),
+              resolution: "user_approved",
+            },
+          },
+          decision: buildDecisionEvent(
+            gate.decision,
+            check,
+            agentName,
+            "allow",
+            "user_approved",
+          ),
+        },
+        agentName,
+      );
+    }
+    return runner.run(gate, agentName);
   }
 }
 

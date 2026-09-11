@@ -4,16 +4,16 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentTypeRegistry } from "#src/config/agent-types";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
-import type { ResumeRefusal } from "#src/lifecycle/subagent";
+import type { ResumeOptions, ResumeRefusal } from "#src/lifecycle/subagent";
 import type { AgentSpawnConfig } from "#src/lifecycle/subagent-manager";
 import {
 	renderOutcomeAddenda,
 	renderOutcomeBody,
 	renderStatusNote,
 } from "#src/observation/outcome-delivery";
-import { spawnBackground } from "#src/tools/background-spawner";
+import { backgroundResult, spawnBackground } from "#src/tools/background-spawner";
 import { runForeground } from "#src/tools/foreground-runner";
-import { buildAgentGuidelines, buildDetails, buildTypeListText, textResult } from "#src/tools/helpers";
+import { buildAgentGuidelines, buildDetails, buildTypeListText, renderSpawnNotes, textResult } from "#src/tools/helpers";
 import { renderAgentResult } from "#src/tools/result-renderer";
 import { type ModelInfo, resolveSpawnConfig } from "#src/tools/spawn-config";
 import type { ParentSessionInfo, Subagent } from "#src/types";
@@ -26,7 +26,7 @@ import { GLYPHS } from "#src/ui/glyphs";
 export interface AgentToolManager {
 	spawn: (snapshot: ParentSnapshot, type: string, prompt: string, opts: AgentSpawnConfig) => string;
 	spawnAndWait: (snapshot: ParentSnapshot, type: string, prompt: string, opts: Omit<AgentSpawnConfig, "background">) => Promise<Subagent>;
-	resume: (id: string, prompt: string, signal: AbortSignal) => Promise<Subagent | undefined>;
+	resume: (id: string, prompt: string, options: ResumeOptions) => Promise<Subagent | undefined>;
 	getRecord: (id: string) => Subagent | undefined;
 }
 
@@ -72,57 +72,56 @@ export class AgentTool {
 		// Reload custom agents so new .pi/agents/*.md files are picked up without restart
 		this.registry.reload();
 
-		// ---- Config resolution (pure) ----
+		const resumeId = params.resume as string | undefined;
+		const existing = resumeId ? this.manager.getRecord(resumeId) : undefined;
+		if (resumeId) {
+			if (!existing) {
+				return textResult(`Agent not found: "${resumeId}". Records are cleared at session start/switch, so it may be from a previous session.`);
+			}
+			if (existing.resumeRefusal) {
+				return textResult(resumeRefusalMessage(existing.resumeRefusal, resumeId));
+			}
+		}
+
+		// A resume keeps its session's identity. In particular, another supplied
+		// type must not substitute a different background default or bypass locks.
 		const config = resolveSpawnConfig(
-			params,
+			existing ? { ...params, subagent_type: existing.type } : params,
 			this.registry,
 			this.runtime.getModelInfo(),
 			this.settings,
 		);
 		if ("error" in config) return textResult(config.error);
 
-		// ---- Boundary extraction (after config so inheritContext is resolved) ----
-		const snapshot = this.runtime.buildSnapshot(config.execution.inheritContext);
-		const { parentSessionFile, parentSessionId } = this.runtime.getSessionInfo();
-		const parentSession: ParentSessionInfo = { parentSessionFile, parentSessionId, toolCallId };
-
 		// ---- Resume existing agent ----
-		if (params.resume) {
-			const existing = this.manager.getRecord(params.resume as string);
-			if (!existing) {
-				return textResult(
-					`Agent not found: "${params.resume as string}". Records are cleared at session start/switch, so it may be from a previous session.`,
-				);
+		if (resumeId) {
+			const isBackground = config.execution.runInBackground;
+			let record: Subagent | undefined;
+			try {
+				record = await this.manager.resume(resumeId, config.execution.prompt, {
+					isBackground,
+					signal: isBackground ? undefined : signal,
+				});
+			} catch (err) {
+				return textResult(err instanceof Error ? err.message : String(err));
 			}
-			// The record owns the decision; this door owns only how it is worded. The
-			// result carriers read the same predicate, so an affordance can no longer
-			// name a resume this branch would decline.
-			const refusal = existing.resumeRefusal;
-			if (refusal) {
-				return textResult(resumeRefusalMessage(refusal, params.resume as string));
-			}
-			// Resuming commits this call to delivering the resumed outcome. Claim it
-			// before the resume starts: resetForResume runs synchronously inside
-			// resume(), so a claim made afterwards would miss the terminal edge.
-			existing.claim();
-			const record = await this.manager.resume(
-				params.resume as string,
-				params.prompt as string,
-				signal ?? new AbortController().signal,
-			);
-			if (!record) {
-				existing.release();
-				return textResult(`Failed to resume agent "${params.resume as string}".`);
-			}
+			if (!record) return textResult(`Failed to resume agent "${resumeId}".`);
+			if (isBackground) return backgroundResult(record.id, record, config, this.settings);
 			// Resume-return delivery edge: the resumed outcome is returned directly.
 			record.markConsumed();
 			return textResult(
+				renderSpawnNotes(config.notes) +
 				`Agent ID: ${record.id}${renderStatusNote(record.status)}\n\n` +
 					renderOutcomeBody(record) +
 					renderOutcomeAddenda(record),
 				buildDetails(config.presentation.detailBase, record),
 			);
 		}
+
+		// New sessions alone need a spawn-time parent snapshot.
+		const snapshot = this.runtime.buildSnapshot(config.execution.inheritContext);
+		const { parentSessionFile, parentSessionId } = this.runtime.getSessionInfo();
+		const parentSession: ParentSessionInfo = { parentSessionFile, parentSessionId, toolCallId };
 
 		// ---- Background execution ----
 		if (config.execution.runInBackground) {
@@ -275,6 +274,8 @@ ${guidelines}
  */
 function resumeRefusalMessage(refusal: ResumeRefusal, id: string): string {
 	switch (refusal) {
+		case "active":
+			return `Agent "${id}" is still running, queued, or stopping. Wait for it to settle before resuming; use steer_subagent for a running agent.`;
 		case "session-released":
 			return `Agent "${id}" had its session released after its retention window; resume is unavailable, but its result is still retrievable via get_subagent_result.`;
 		case "no-session":

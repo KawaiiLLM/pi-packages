@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import { SubagentState } from "#src/lifecycle/subagent-state";
+import { NotificationManager } from "#src/observation/notification";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
 import type { SubagentsService } from "#src/service/service";
 import type { ServiceRuntimeLike, SubagentManagerLike } from "#src/service/service-adapter";
@@ -246,6 +247,51 @@ describe("SubagentsServiceAdapter — getRecord and listAgents", () => {
       makeRuntimeStub(),
     );
   }
+
+  it.each(["completed", "error", "stopped"] as const)("waitForResult claims before waiting and consumes a %s outcome", async (status) => {
+    const record = createTestSubagent({ status });
+    const svc = createService([record]);
+    const sendMessage = vi.fn();
+    const notifications = new NotificationManager(sendMessage);
+    const signal = new AbortController().signal;
+    const wait = vi.spyOn(record, "waitUntilSettled").mockImplementation(async (received) => {
+      expect(received).toBe(signal);
+      expect(record.claimed).toBe(true);
+      expect(record.consumed).toBe(false);
+      notifications.sendCompletion(record);
+    });
+    expect(await svc.waitForResult(record.id, signal)).toEqual(toSubagentRecord(record));
+    expect(wait).toHaveBeenCalledOnce();
+    expect(record.consumed).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("interruption keeps delivery with the caller, including its later cancellation", async () => {
+    const record = createTestSubagent({ status: "running" });
+    const svc = createService([record]);
+    const result = await svc.waitForResult(record.id, AbortSignal.abort());
+    expect(result?.status).toBe("running");
+    expect(record.claimed).toBe(true);
+    expect(record.consumed).toBe(false);
+    record.markStopped();
+    const sendMessage = vi.fn();
+    new NotificationManager(sendMessage).sendCompletion(record);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("waitForResult returns undefined for a missing child", async () => {
+    expect(await createService([]).waitForResult("missing", new AbortController().signal)).toBeUndefined();
+  });
+
+  it("getRecord remains passive and ordinary completions still notify", () => {
+    const record = createTestSubagent();
+    createService([record]).getRecord(record.id);
+    expect(record.claimed).toBe(false);
+    expect(record.consumed).toBe(false);
+    const sendMessage = vi.fn();
+    new NotificationManager(sendMessage).sendCompletion(record);
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
 
   it("getRecord returns serialized record for known id", () => {
     const svc = createService([recordA, recordB]);

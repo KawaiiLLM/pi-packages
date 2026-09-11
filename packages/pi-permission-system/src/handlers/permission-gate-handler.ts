@@ -1,6 +1,7 @@
 import type {
   ExtensionContext,
   InputEventResult,
+  InputSource,
 } from "@earendil-works/pi-coding-agent";
 import {
   checkRequestedToolRegistration,
@@ -24,6 +25,7 @@ import { toRecord } from "#src/value-guards";
 /** Minimal subset of InputEvent used by handleInput. */
 interface InputPayload {
   text: string;
+  source?: InputSource;
 }
 
 /**
@@ -100,6 +102,7 @@ export class PermissionGateHandler {
       agentName,
       notifier,
       this.runner,
+      event.source,
     );
     return outcome.action === "block"
       ? { action: "handled" }

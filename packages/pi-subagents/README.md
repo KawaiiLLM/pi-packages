@@ -129,6 +129,10 @@ Launch a sub-agent.
 These five parameters win over the agent file's own values, which fill whichever the call leaves unset.
 An agent file can withhold one with [`locked`](./docs/configuration.md#locking-fields-against-callers); the result then names the agent and the parameters it ignored.
 
+For `resume`, `run_in_background` controls the resumed run too: background returns the same agent ID immediately and notifies on completion; foreground waits and returns the outcome directly.
+Its default and lock come from the existing agent's type, not a different `subagent_type` supplied with the resume call. The existing session and its model, tools, and turn limit are retained.
+An agent still running, queued, or stopping must settle before it can be resumed; use `steer_subagent` to redirect a running agent.
+
 ### `get_subagent_result`
 
 Check status and retrieve results from a background agent.
@@ -186,7 +190,7 @@ Instead of hard-aborting at the turn limit, agents get a graceful shutdown:
 
 ## Concurrency
 
-Background agents are subject to a configurable concurrency limit (default: 4).
+Background agents, including resumed runs, are subject to a configurable concurrency limit (default: 4).
 Excess agents are automatically queued and start as running agents complete.
 The widget shows queued agents as a collapsed count.
 
@@ -298,6 +302,8 @@ See `src/service/service.ts` for the full `SubagentsService` interface and the `
 `spawn` returns the new agent's id immediately — it never waits for the run.
 Use `getRecord(id)` to poll, `steer` to send a message, and the `subagents:completed` event to learn when it finished.
 
+A consumer that delivers its own result should call `waitForResult(id, signal)` immediately after spawning. It claims delivery, waits using the agent's existing lifecycle, and marks settled results consumed, avoiding duplicate completion notifications. On interruption it returns the current snapshot without releasing the claim or cancelling the child; the caller must cancel or collect the child. `getRecord` remains passive.
+
 The agent type is canonicalized, so `"explore"` and `"Explore"` reach the same agent.
 An unrecognized type falls back to `general-purpose` rather than throwing, matching the `subagent` tool's behavior.
 
@@ -323,7 +329,7 @@ A spawned agent is a first-class citizen of the runtime: it appears in the backg
 Both return `SubagentRecord`, a by-value snapshot: nothing in it changes after you receive it, and writing to it cannot reach the agent.
 Poll again for fresh data.
 
-The snapshot carries identity (`id`, `type`, `description`), lifecycle status (`status`, `startedAt`, `completedAt`, `result`, `error`), the resolved spawn facts (`isBackground`, `maxTurns`), cumulative metrics (`toolUses`, `turnCount`, `compactionCount`, `lifetimeUsage`), and `outputFile` — the path to the agent's session JSONL, which you can read with Pi's own `parseSessionEntries`.
+The snapshot carries identity (`id`, `type`, `description`), lifecycle status (`status`, `startedAt`, `completedAt`, `result`, `error`), the current run mode (`isBackground`) and configured turn limit (`maxTurns`), cumulative metrics (`toolUses`, `turnCount`, `compactionCount`, `lifetimeUsage`), and `outputFile` — the path to the agent's session JSONL, which you can read with Pi's own `parseSessionEntries`.
 
 It deliberately withholds momentary activity (the tools running right now, the partial response text) and this package's internal bookkeeping.
 A pulled snapshot of momentary state would be stale on arrival; [decision 0005](docs/decisions/0005-subagent-record-admission-policy.md) records the full policy and what would reopen it.

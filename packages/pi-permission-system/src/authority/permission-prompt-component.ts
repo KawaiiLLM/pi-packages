@@ -17,6 +17,7 @@ import type { DecisionSource, UserDecisionSurface } from "./decision-source";
 import {
   type PermissionPromptDecision,
   type RequestPermissionOptions,
+  createDeniedPermissionDecision,
   requestPermissionDecisionFromUi,
   type UnattributedDecision,
 } from "./permission-dialog";
@@ -53,6 +54,8 @@ type PromptKeybindings = Pick<KeybindingsManager, "matches">;
 export interface PermissionPromptView extends PromptPreferences {
   mode: ExtensionContext["mode"];
   ui: PermissionPromptUi;
+  /** Cancellation of the queued ask or its serving session. */
+  signal?: AbortSignal;
 }
 
 /** Live prompt-behavior preferences read at prompt time (see `doublePressToConfirm`). */
@@ -80,6 +83,7 @@ export async function requestPermissionDecision(
   payload: PromptPayload,
   options?: RequestPermissionOptions,
 ): Promise<PermissionPromptDecision> {
+  view.signal?.throwIfAborted();
   if (view.mode === "tui") {
     return attributeToHuman(
       await presentInlinePermissionPrompt(view, title, payload, options),
@@ -95,7 +99,16 @@ export async function requestPermissionDecision(
   });
   return attributeToHuman(
     await requestPermissionDecisionFromUi(
-      view.ui,
+      view.signal ? {
+        select: (label, choices) => {
+          view.signal!.throwIfAborted();
+          return view.ui.select(label, choices, { signal: view.signal });
+        },
+        input: (label, placeholder) => {
+          view.signal!.throwIfAborted();
+          return view.ui.input(label, placeholder, { signal: view.signal });
+        },
+      } : view.ui,
       title,
       rendered.lines.join("\n"),
       options,
@@ -130,7 +143,7 @@ const OPTION_LABELS: Record<PromptKey, string> = {
   r: "No, provide reason",
 };
 
-export function presentInlinePermissionPrompt(
+export async function presentInlinePermissionPrompt(
   view: PermissionPromptView,
   title: string,
   payload: PromptPayload,
@@ -142,22 +155,32 @@ export function presentInlinePermissionPrompt(
     widthLabel: options?.sessionWidth?.label,
     sessionScope: options?.sessionScope,
   };
-  return view.ui.custom<UnattributedDecision>(
-    (tui, theme, keybindings, done) =>
-      new PermissionPromptComponent(
-        theme,
-        config,
-        title,
-        payload,
-        view.budget,
-        (data) => handleToolsExpandAction(data, keybindings, view.ui),
-        () => {
-          tui.requestRender();
-        },
-        done,
-      ),
-    { overlay: false },
-  );
+  let cancel: (() => void) | undefined;
+  try {
+    view.signal?.throwIfAborted();
+    return await view.ui.custom<UnattributedDecision>(
+      (tui, theme, keybindings, done) => {
+        cancel = () => done(createDeniedPermissionDecision());
+        view.signal?.addEventListener("abort", cancel, { once: true });
+        if (view.signal?.aborted) cancel();
+        return new PermissionPromptComponent(
+          theme,
+          config,
+          title,
+          payload,
+          view.budget,
+          (data) => handleToolsExpandAction(data, keybindings, view.ui),
+          () => {
+            tui.requestRender();
+          },
+          done,
+        );
+      },
+      { overlay: false },
+    );
+  } finally {
+    if (cancel) view.signal?.removeEventListener("abort", cancel);
+  }
 }
 
 /**

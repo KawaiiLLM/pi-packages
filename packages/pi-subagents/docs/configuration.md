@@ -206,7 +206,7 @@ Neither reaches the filesystem, the shell, or the network, so a read-only agent 
 `ask_parent` records a question and tells the child to end its turn, so the delegating agent can answer by resuming it; `notify_parent` sends a one-way update and returns at once.
 A question outlives the window in which it can be answered — the session is released after its retention window, and a workspace is torn down at run end unless the child completed — so once a resume would be refused, the result reports the question and the reason rather than the `resume` call.
 Both go to every agent, `notify_parent` only while [`midRunUpdates`](#persistent-settings) is on.
-Where an update lands depends on what you are doing when it is sent: while you are blocked awaiting that agent — a foreground call, a resume, or `get_subagent_result` with `wait` — it rides that call's own result, under "Updates this agent sent while it worked".
+Where an update lands depends on what you are doing when it is sent: while you are blocked awaiting that agent — a foreground call (including resume), or `get_subagent_result` with `wait` — it rides that call's own result, under "Updates this agent sent while it worked".
 Otherwise it arrives as its own message while the agent keeps working.
 
 Accepted forms, all equivalent:
@@ -335,6 +335,9 @@ Set `abortAllOnInterrupt` to `false` (or flip it from `/subagents:settings`) to 
 
 A foreground agent aborts on ESC regardless of this setting.
 It holds the parent's own run signal for the duration of its blocking tool call, so the interrupt reaches it directly; the policy governs background and queued agents.
+
+The same rules apply to resumed runs: a background resume is detached from the parent tool call's signal, while a foreground resume remains linked to it.
+Explicitly stopping a child, switching sessions, or shutting down Pi still stops background work.
 
 The policy is read at the moment ESC fires, so flipping it mid-session applies to the very next interrupt.
 

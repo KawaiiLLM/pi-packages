@@ -86,6 +86,14 @@ describe("renderQuestionAffordance", () => {
 	});
 
 	describe("when a resume would be refused", () => {
+		it("treats an active run as a temporary refusal, not a lost session", () => {
+			const text = renderQuestionAffordance("agent-7", "Which config?", "active");
+			expect(text).toContain("Which config?");
+			expect(text).toContain("Wait for it to settle");
+			expect(text).not.toContain("Spawn a new agent");
+			expect(text).not.toContain("resume:");
+		});
+
 		it("reports a released session without naming a resume", () => {
 			expect(renderQuestionAffordance("agent-7", "Which config?", "session-released")).toBe(
 				"\n\nThis agent ended its run with a question that can no longer be answered \u2014 " +

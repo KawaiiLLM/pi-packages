@@ -61,6 +61,46 @@ function makeDetailsOn(surface: string): PromptPermissionDetails {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe("AuthorizerSelection", () => {
+  it("keeps the UI terminal and its queue across tool-event activations of the same session", async () => {
+    const prompter = makePrompterApi();
+    const selection = new AuthorizerSelection(makeDeps({ prompter }));
+    const first = makeCtx();
+    vi.mocked(first.sessionManager.getSessionId).mockReturnValue("same-session");
+    selection.activate(first);
+    await selection.escalate(makeDetails());
+    const terminal = prompter.prompt.mock.calls[0]![0];
+    const nextContext = makeCtx();
+    vi.mocked(nextContext.sessionManager.getSessionId).mockReturnValue("same-session");
+    selection.activate(nextContext);
+    await selection.escalate(makeDetails());
+    expect(prompter.prompt.mock.calls[1]![0]).toBe(terminal);
+    selection.deactivate();
+  });
+
+  it.each(["deactivate", "replace"] as const)("%s cancels the old terminal, including asks still queued", async (operation) => {
+    const request = vi.fn<ReturnType<typeof makeDeps>["requestPermissionDecision"]>(() => new Promise(() => {}));
+    const selection = new AuthorizerSelection(makeDeps({
+      requestPermissionDecision: request, prompter: makeInvokingPrompter(),
+    }));
+    const ctx = makeCtx();
+    vi.mocked(ctx.sessionManager.getSessionId).mockReturnValue("old-session");
+    selection.activate(ctx);
+    const first = selection.escalate(makeDetails());
+    const queued = selection.escalate(makeDetails());
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    if (operation === "deactivate") selection.deactivate();
+    else {
+      const next = makeCtx();
+      vi.mocked(next.sessionManager.getSessionId).mockReturnValue("new-session");
+      selection.activate(next);
+    }
+    for (const result of await Promise.all([first, queued])) {
+      expect(result).toMatchObject({ approved: false, confirmationUnavailable: true });
+    }
+    expect(request).toHaveBeenCalledOnce();
+    selection.deactivate();
+  });
+
   describe("escalate", () => {
     it("rejects before activate", async () => {
       const selection = new AuthorizerSelection(makeDeps());

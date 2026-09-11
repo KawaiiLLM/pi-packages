@@ -87,6 +87,13 @@ export interface SubagentsService {
   /** Get a snapshot of an agent's current state. */
   getRecord(id: string): SubagentRecord | undefined;
 
+  /**
+   * Claim result delivery and wait for settlement or interruption.
+   * The claim remains on interruption: the caller must cancel or collect the
+   * child; no completion notification will duplicate its handling of the result.
+   */
+  waitForResult(id: string, signal: AbortSignal): Promise<SubagentRecord | undefined>;
+
   /** List all tracked agents, most recent first. */
   listAgents(): SubagentRecord[];
 

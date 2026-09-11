@@ -15,10 +15,10 @@
  */
 
 /** Which human-facing surface the operator answered on. */
-export type UserDecisionSurface = "dialog" | "select";
+export type UserDecisionSurface = "dialog" | "select" | "interactive" | "rpc";
 
 export type DecisionSource =
-  /** A human ruled, at the inline dialog or the `select`/`input` fallback. */
+  /** Operator consent: a dialog answer or a user-origin skill command input. */
   | { kind: "user"; via: UserDecisionSurface }
   /** A registered `authorizerChain` link ruled; `name` is the configured name. */
   | {
@@ -249,6 +249,8 @@ function narrowForwarded(
 const USER_DECISION_SURFACES = [
   "dialog",
   "select",
+  "interactive",
+  "rpc",
 ] as const satisfies readonly UserDecisionSurface[];
 
 const AUTHORIZER_VERDICTS = ["allow", "deny"] as const;

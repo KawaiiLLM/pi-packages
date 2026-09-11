@@ -32,6 +32,8 @@ export interface LocalUserAuthorizerDeps {
   events: PermissionEventBus;
   /** Read live at prompt time so a settings-modal toggle takes effect on the next prompt. */
   getPromptPreferences: () => PromptPreferences;
+  /** Capture the current parent run's cancellation signal when an ask arrives. */
+  getSignal?: () => AbortSignal | undefined;
   /** Injected for testability; production callers pass the real function. */
   requestPermissionDecision: typeof requestPermissionDecision;
 }
@@ -47,25 +49,52 @@ export interface LocalUserAuthorizerDeps {
  * broadcast stays non-degraded (#292) without a second emission path.
  */
 export class LocalUserAuthorizer implements TerminalAuthorizer {
+  private tail: Promise<void> = Promise.resolve();
+  private readonly lifetime = new AbortController();
+
   constructor(private readonly deps: LocalUserAuthorizerDeps) {}
+
+  dispose(): void {
+    this.lifetime.abort(new Error("Permission session ended"));
+  }
 
   authorize(
     details: PromptPermissionDetails,
   ): Promise<PermissionPromptDecision> {
-    const uiPrompt = buildUiPrompt(details);
-    emitUiPromptEvent(this.deps.events, uiPrompt);
-    return this.deps.requestPermissionDecision(
-      {
-        mode: this.deps.mode,
-        ui: this.deps.ui,
-        ...this.deps.getPromptPreferences(),
-      },
-      details.forwarding
-        ? "Permission Required (Subagent)"
-        : "Permission Required",
-      details.payload,
-      buildRequestOptions(details),
-    );
+    const runSignal = this.lifetime.signal.aborted ? undefined : this.deps.getSignal?.();
+    const signal = AbortSignal.any(runSignal
+      ? [this.lifetime.signal, runSignal]
+      : [this.lifetime.signal]);
+    return new Promise((resolve, reject) => {
+      const cancel = () => resolve({
+        approved: false,
+        state: "denied",
+        confirmationUnavailable: true,
+        decidedBy: { kind: "unavailable", reason: "Permission prompt cancelled" },
+      });
+      if (signal.aborted) { cancel(); return; }
+      signal.addEventListener("abort", cancel, { once: true });
+      // One terminal per serving session: direct and forwarded asks share this
+      // queue. Only human interaction is serialized, not the model reviewers.
+      this.tail = this.tail.then(async () => {
+        if (signal.aborted) return;
+        emitUiPromptEvent(this.deps.events, buildUiPrompt(details));
+        const decision = await this.deps.requestPermissionDecision(
+          {
+            mode: this.deps.mode,
+            ui: this.deps.ui,
+            ...this.deps.getPromptPreferences(),
+            signal,
+          },
+          details.forwarding
+            ? "Permission Required (Subagent)"
+            : "Permission Required",
+          details.payload,
+          buildRequestOptions(details),
+        );
+        if (!signal.aborted) resolve(decision);
+      }).catch(reject).finally(() => signal.removeEventListener("abort", cancel));
+    });
   }
 }
 

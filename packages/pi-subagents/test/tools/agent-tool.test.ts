@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { AgentTool } from "#src/tools/agent-tool";
+import { AgentTypeRegistry } from "#src/config/agent-types";
 import { createToolDeps, createToolDepsWithDisabledBuiltInAgents } from "#test/helpers/make-deps";
 import { createTestSubagent, makeStubExecution } from "#test/helpers/make-subagent";
 import { makeWorkspace, makeWorkspaceProvider } from "#test/helpers/make-workspace";
@@ -323,17 +324,15 @@ describe("AgentTool — resume path", () => {
 		expect(result.content[0].text).toContain("Half of it");
 	});
 
-	it("claims the outcome before resuming, so the resume is never announced", async () => {
+	it("delegates delivery ownership to the new foreground resume lifecycle", async () => {
 		const deps = createToolDeps();
 		const resumeRecord = createTestSubagent();
 		resumeRecord.subagentSession = toSubagentSession(createSubagentSessionStub(createMockSession()));
 		deps.manager.getRecord = vi.fn().mockReturnValue(resumeRecord);
-		// resetForResume runs synchronously inside resume(), so a claim that only
-		// survives if it is caller-scoped is the thing being pinned here.
-		deps.manager.resume = vi.fn(() => {
-			expect(resumeRecord.claimed).toBe(true);
-			resumeRecord.resetForResume(Date.now());
-			return Promise.resolve(createTestSubagent({ result: "Resumed output." }));
+		deps.manager.resume = vi.fn(async (_id, prompt, options) => {
+			expect(resumeRecord.claimed).toBe(false);
+			await resumeRecord.resume(prompt, options);
+			return resumeRecord;
 		});
 
 		await execute(deps, {
@@ -347,7 +346,7 @@ describe("AgentTool — resume path", () => {
 		expect(resumeRecord.claimed).toBe(true);
 	});
 
-	it("releases the claim when the resume fails", async () => {
+	it("leaves an unclaimed record untouched when resume admission fails", async () => {
 		const deps = createToolDeps();
 		const resumeRecord = createTestSubagent();
 		resumeRecord.subagentSession = toSubagentSession(createSubagentSessionStub(createMockSession()));
@@ -394,6 +393,61 @@ describe("AgentTool — resume path", () => {
 			resume: "agent-1",
 		});
 		expect(result.content[0].text).toContain("Agent ID: agent-1");
+	});
+});
+
+describe("AgentTool — resume mode resolution", () => {
+	it.each([true, false, undefined])("uses the existing type's file default (%s), not its previous run or the supplied type", async (mode) => {
+		const registry = new AgentTypeRegistry(() => new Map([["Special", {
+			name: "Special", description: "special", systemPrompt: "", promptMode: "append" as const,
+			runInBackground: mode,
+		}]]));
+		const deps = createToolDeps({ registry });
+		const record = createTestSubagent({ type: "Special", sessionReady: true, isBackground: !mode });
+		deps.manager.getRecord = vi.fn(() => record);
+		await execute(deps, { resume: record.id, prompt: "continue", description: "resume", subagent_type: "Plan" });
+		expect(deps.manager.resume).toHaveBeenCalledWith(record.id, "continue", {
+			isBackground: mode ?? false,
+			signal: mode ? undefined : expect.any(AbortSignal),
+		});
+		expect(deps.runtime.buildSnapshot).not.toHaveBeenCalled();
+	});
+
+	it.each([true, false])("cannot bypass the existing type's locked background mode (%s) by passing another type", async (mode) => {
+		const registry = new AgentTypeRegistry(() => new Map([["Special", {
+			name: "Special", description: "special", systemPrompt: "", promptMode: "append" as const,
+			runInBackground: mode, locked: ["run_in_background"] as const,
+		}]]));
+		const deps = createToolDeps({ registry });
+		const record = createTestSubagent({ type: "Special", sessionReady: true });
+		deps.manager.getRecord = vi.fn(() => record);
+		const result = await execute(deps, {
+			resume: record.id, prompt: "continue", description: "resume", subagent_type: "Plan", run_in_background: !mode,
+		});
+		expect(deps.manager.resume).toHaveBeenCalledWith(record.id, "continue", {
+			isBackground: mode, signal: mode ? undefined : expect.any(AbortSignal),
+		});
+		expect(result.content[0].text).toContain('agent "Special" locks run_in_background');
+	});
+
+	it.each(["running", "queued"] as const)("refuses an already %s session without claiming it", async (status) => {
+		const deps = createToolDeps();
+		const record = createTestSubagent({ status, sessionReady: true });
+		deps.manager.getRecord = vi.fn(() => record);
+		const result = await execute(deps, { resume: record.id, prompt: "continue", description: "resume", subagent_type: "Plan" });
+		expect(result.content[0].text).toContain("Wait for it to settle");
+		expect(deps.manager.resume).not.toHaveBeenCalled();
+		expect(record.claimed).toBe(false);
+	});
+
+	it("does not release an existing carrier's claim after failed admission", async () => {
+		const deps = createToolDeps();
+		const record = createTestSubagent({ sessionReady: true });
+		record.claim();
+		deps.manager.getRecord = vi.fn(() => record);
+		deps.manager.resume = vi.fn().mockResolvedValue(undefined);
+		await execute(deps, { resume: record.id, prompt: "continue", description: "resume", subagent_type: "Plan" });
+		expect(record.claimed).toBe(true);
 	});
 });
 

@@ -109,6 +109,36 @@ describe("handleToolCall", () => {
 // ── skill-read gate ────────────────────────────────────────────────────────
 
 describe("handleToolCall — skill-read gate", () => {
+  it("still asks for model skill reads after a user-origin skill invocation", async () => {
+    const location = "/test/project/skills/librarian/SKILL.md";
+    const { handler, prompter, recorder } = makeHandler({
+      session: {
+        checkPermission: vi.fn().mockImplementation((surface: string) =>
+          makeCheckResult({ state: surface === "skill" ? "ask" : "allow" }),
+        ),
+        getActiveSkillEntries: vi.fn().mockReturnValue([{
+          name: "librarian",
+          description: "Research skills",
+          location,
+          state: "ask",
+          normalizedLocation: location,
+          normalizedBaseDir: "/test/project/skills/librarian",
+        }]),
+      },
+    });
+    await handler.handleInput(
+      { text: "/skill:librarian", source: "interactive" }, makeCtx(),
+    );
+    expect(prompter.escalate).not.toHaveBeenCalled();
+    expect(recorder.getRuleset()).toEqual([]);
+    await handler.handleToolCall(
+      makeToolCallEvent("read", { input: { path: location } }), makeCtx(),
+    );
+    expect(prompter.escalate).toHaveBeenCalledWith(expect.objectContaining({
+      source: "skill_read", skillName: "librarian",
+    }));
+  });
+
   it("blocks a read of a denied skill path", async () => {
     const skillEntry = {
       name: "librarian",

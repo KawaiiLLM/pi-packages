@@ -11,6 +11,14 @@ describe("RunListeners — wireSignal", () => {
 		expect(onAbort).toHaveBeenCalledOnce();
 	});
 
+	it("fires immediately for an already-aborted signal", () => {
+		const listeners = new RunListeners();
+		const onAbort = vi.fn();
+		listeners.wireSignal(AbortSignal.abort(), onAbort);
+		expect(onAbort).toHaveBeenCalledOnce();
+		listeners.release();
+	});
+
 	it("is a no-op when signal is undefined", () => {
 		const listeners = new RunListeners();
 		expect(() => listeners.wireSignal(undefined, vi.fn())).not.toThrow();

@@ -316,6 +316,25 @@ describe("AgentWidget — self-drives from lifecycle notifications", () => {
 		expect(typeof lastContent()).toBe("function");
 	});
 
+	it("shows a resumed completion again after its previous result aged out", () => {
+		const agents = [{ id: "a1", status: "completed", completedAt: 5000 as number | undefined }];
+		const { widget, lastContent } = makeWidget(agents);
+		widget.update();
+		widget.onTurnStart();
+		expect(lastContent()).toBeUndefined();
+		agents[0].status = "running";
+		agents[0].completedAt = undefined;
+		widget.onSubagentStarted(createTestSubagent({ id: "a1", status: "running" }));
+		expect(typeof lastContent()).toBe("function");
+		agents[0].status = "completed";
+		agents[0].completedAt = 9000;
+		widget.onSubagentResumed(createTestSubagent({ id: "a1", status: "completed" }));
+		expect(typeof lastContent()).toBe("function");
+		widget.onTurnStart();
+		expect(lastContent()).toBeUndefined();
+		widget.dispose();
+	});
+
 	it("renders on onSubagentCompacted", () => {
 		const { widget, lastContent } = makeWidget([{ id: "a1", status: "running" }]);
 

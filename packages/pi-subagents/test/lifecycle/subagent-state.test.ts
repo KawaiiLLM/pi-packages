@@ -424,12 +424,12 @@ describe("SubagentState — carrier claim", () => {
 		expect(state.consumedAt).toBe(5000);
 	});
 
-	it("survives resetForResume, which clears consumption but not the claim", () => {
+	it("clears both old consumption and the old claim on resetForResume", () => {
 		const state = new SubagentState({ status: "completed" });
 		state.claim();
 		state.markConsumed(5000);
 		state.resetForResume(7000);
-		expect(state.claimed).toBe(true);
+		expect(state.claimed).toBe(false);
 		expect(state.consumedAt).toBeUndefined();
 	});
 });

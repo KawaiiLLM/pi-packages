@@ -161,6 +161,53 @@ describe("ConcurrencyLimiter", () => {
 		});
 	});
 
+	describe("queued cancellation", () => {
+		it("settles and removes a cancelled queued task without freeing the running slot", async () => {
+			const limiter = new ConcurrencyLimiter(() => 1);
+			const a = makeTask();
+			const b = makeTask();
+			const c = makeTask();
+			const controller = new AbortController();
+			const running = limiter.schedule(a.task);
+			const cancelled = limiter.schedule(b.task, controller.signal);
+			const next = limiter.schedule(c.task);
+			controller.abort();
+			await cancelled;
+			expect(b.task).not.toHaveBeenCalled();
+			expect(c.task).not.toHaveBeenCalled();
+			a.resolve();
+			await running;
+			await Promise.resolve();
+			expect(c.task).toHaveBeenCalledOnce();
+			c.resolve();
+			await next;
+		});
+
+		it("does not admit a task with a pre-aborted signal", async () => {
+			const limiter = new ConcurrencyLimiter(() => 1);
+			const { task } = makeTask();
+			await limiter.schedule(task, AbortSignal.abort());
+			expect(task).not.toHaveBeenCalled();
+		});
+
+		it("keeps an admitted task's slot until it settles, even after cancellation", async () => {
+			const limiter = new ConcurrencyLimiter(() => 1);
+			const a = makeTask();
+			const b = makeTask();
+			const controller = new AbortController();
+			const running = limiter.schedule(a.task, controller.signal);
+			const queued = limiter.schedule(b.task);
+			controller.abort();
+			expect(b.task).not.toHaveBeenCalled();
+			a.resolve();
+			await running;
+			await Promise.resolve();
+			expect(b.task).toHaveBeenCalledOnce();
+			b.resolve();
+			await queued;
+		});
+	});
+
 	describe("clear()", () => {
 		it("drops pending tasks without running them", () => {
 			const limiter = new ConcurrencyLimiter(() => 1);

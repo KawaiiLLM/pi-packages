@@ -374,7 +374,7 @@ src/
 │
 ├── observation/                    progress tracking and notification
 │   ├── record-observer.ts          session-event stats observer
-│   ├── notification.ts             completion nudges and mid-run updates, in one arrival-ordered withheld queue (announce-only; both gated on the carrier claim, since a claimed outcome is one a blocked carrier delivers itself; withheld during the parent's agent run, flushed on agent_settled), plus workspace notices, which are announced straight through
+│   ├── notification.ts             completion nudges withheld until agent_settled and rechecked for consumption; mid-run updates sent directly through Pi's steer queue (both gated on the carrier claim); workspace notices announced straight through without triggering a turn
 │   ├── outcome-delivery.ts         shared outcome rendering every result carrier composes: one status vocabulary in two presentations, body, and the addenda tail (mid-run updates, workspace notice, ask-back affordance — which names a resume only when the record says one would be accepted) in one fixed order
 │   ├── renderer.ts                 notification, mid-run-update, and workspace-notice TUI components
 │   ├── composite-subagent-observer.ts fans manager notifications out to multiple observers; enumerates every member, so an optional one it omits is dropped silently

@@ -442,28 +442,39 @@ describe("NotificationManager", () => {
     function makePiParent() {
       const deliveredToLlm: string[] = [];
       let deferredUntilTurnEnd: string[] = [];
+      const steering: string[] = [];
+      const followUps: string[] = [];
       let runActive = false;
-      const manager = new NotificationManager((msg, opts) => {
+      const sendMessage = vi.fn((msg: { content: string }, opts?: SendOptions) => {
         switch (piDeliveryPath(runActive, opts)) {
           case "buffered":
             return;
           case "deferred":
             deferredUntilTurnEnd.push(msg.content);
             return;
+          case "queued":
+            (opts?.deliverAs === "followUp" ? followUps : steering).push(msg.content);
+            return;
           default:
             deliveredToLlm.push(msg.content);
         }
       });
+      const manager = new NotificationManager(sendMessage);
       return {
         manager,
+        sendMessage,
         deliveredToLlm,
+        nextModelCall() {
+          const message = steering.shift();
+          if (message) deliveredToLlm.push(message);
+        },
         startRun() {
           runActive = true;
           manager.onParentAgentStart();
         },
         settleRun() {
           runActive = false;
-          deliveredToLlm.push(...deferredUntilTurnEnd);
+          deliveredToLlm.push(...deferredUntilTurnEnd, ...steering.splice(0), ...followUps.splice(0));
           deferredUntilTurnEnd = [];
           manager.onParentAgentSettled();
         },
@@ -569,14 +580,24 @@ describe("NotificationManager", () => {
         const parent = makePiParent();
         parent.manager.sendUpdate(createTestSubagent({ id: "live-1" }), "Course change.");
         expect(parent.deliveredToLlm).toHaveLength(1);
+        expect(parent.sendMessage).toHaveBeenCalledWith(expect.anything(), {
+          deliverAs: "steer", triggerTurn: true,
+        });
       });
 
-      it("is withheld while the parent's run is active, then flushed", () => {
+      it("queues steering immediately and reaches the next model call before the run settles", () => {
         const parent = makePiParent();
         parent.startRun();
         parent.manager.sendUpdate(createTestSubagent({ id: "live-1" }), "Course change.");
+        expect(parent.sendMessage).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+          deliverAs: "steer", triggerTurn: true,
+        });
         expect(parent.deliveredToLlm).toHaveLength(0);
+        parent.nextModelCall();
+        expect(parent.deliveredToLlm).toHaveLength(1);
+        expect(parent.deliveredToLlm[0]).toContain("Course change.");
         parent.settleRun();
+        expect(parent.sendMessage).toHaveBeenCalledOnce();
         expect(parent.deliveredToLlm).toHaveLength(1);
       });
 
@@ -606,8 +627,13 @@ describe("NotificationManager", () => {
         parent.startRun();
         parent.manager.sendUpdate(record, "First finding.");
         parent.manager.sendUpdate(record, "Second finding.");
-        parent.settleRun();
+        parent.nextModelCall();
+        parent.nextModelCall();
         expect(parent.deliveredToLlm).toHaveLength(2);
+        expect(parent.deliveredToLlm[0]).toContain("First finding.");
+        expect(parent.deliveredToLlm[1]).toContain("Second finding.");
+        parent.settleRun();
+        expect(parent.sendMessage).toHaveBeenCalledTimes(2);
       });
 
       it("keeps its place ahead of the same child's later completion", () => {
@@ -616,11 +642,28 @@ describe("NotificationManager", () => {
         parent.startRun();
         parent.manager.sendUpdate(record, "Course change.");
         parent.manager.sendCompletion(record);
+        parent.nextModelCall();
+        expect(parent.deliveredToLlm).toHaveLength(1);
         parent.settleRun();
+        expect(parent.sendMessage.mock.calls[1][1]).toEqual({ deliverAs: "followUp", triggerTurn: true });
         expect(parent.deliveredToLlm.map((c) => c.slice(0, 18))).toEqual([
           "<subagent-update>\n",
           "<task-notification",
         ]);
+      });
+
+      it("does not reannounce a consumed completion after steering an update", () => {
+        const parent = makePiParent();
+        const record = createTestSubagent({ id: "live-1" });
+        parent.startRun();
+        parent.manager.sendUpdate(record, "Course change.");
+        parent.manager.sendCompletion(record);
+        parent.nextModelCall();
+        record.markConsumed();
+        parent.settleRun();
+        expect(parent.sendMessage).toHaveBeenCalledOnce();
+        expect(parent.deliveredToLlm).toHaveLength(1);
+        expect(parent.deliveredToLlm[0]).toContain("<subagent-update>");
       });
 
       it("is announced even after the parent collected an earlier outcome", () => {
@@ -635,8 +678,9 @@ describe("NotificationManager", () => {
         expect(parent.deliveredToLlm).toHaveLength(1);
       });
 
-      it("is left to the carrier that holds the outcome, which is blocked meanwhile", () => {
+      it.each([false, true])("is left to a claimed carrier (parent active: %s)", (active) => {
         const parent = makePiParent();
+        if (active) parent.startRun();
         const record = createTestSubagent({ id: "live-1" });
         record.claim();
 
@@ -644,6 +688,8 @@ describe("NotificationManager", () => {
 
         // A claimed carrier is blocked awaiting this run, so an announcement
         // would arrive after its own return. It renders the update instead.
+        parent.settleRun();
+        expect(parent.sendMessage).not.toHaveBeenCalled();
         expect(parent.deliveredToLlm).toHaveLength(0);
       });
 

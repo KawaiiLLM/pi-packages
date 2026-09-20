@@ -207,14 +207,10 @@ export interface WorkspaceNoticeDetails {
 }
 
 /**
- * One announcement withheld for the parent's current run.
- *
- * A completion for an agent supersedes an earlier one for that agent; two
- * updates are two distinct facts and both survive.
+ * One completion withheld for the parent's current run.
+ * A completion for an agent supersedes an earlier one for that agent.
  */
-type PendingAnnouncement =
-  | { kind: "completion"; record: Subagent; run: AbortController }
-  | { kind: "update"; record: Subagent; message: string };
+type PendingCompletion = { record: Subagent; run: AbortController };
 
 export class NotificationManager implements NotificationSystem {
   // pi.sendMessage is fire-and-forget: while the parent's agent run is active,
@@ -227,7 +223,7 @@ export class NotificationManager implements NotificationSystem {
   // earlier one for that agent, but announcements from different agents are
   // distinct facts, and arrival order is the only order the parent can make
   // sense of.
-  private pending: PendingAnnouncement[] = [];
+  private pending: PendingCompletion[] = [];
   private parentRunActive = false;
   private disposed = false;
 
@@ -266,10 +262,8 @@ export class NotificationManager implements NotificationSystem {
    * fact told again, not a later one.
    */
   private withholdCompletion(record: Subagent): void {
-    const entry: PendingAnnouncement = { kind: "completion", record, run: record.abortController };
-    const existing = this.pending.findIndex(
-      (queued) => queued.kind === "completion" && queued.record.id === record.id,
-    );
+    const entry: PendingCompletion = { record, run: record.abortController };
+    const existing = this.pending.findIndex((queued) => queued.record.id === record.id);
     if (existing === -1) this.pending.push(entry);
     else this.pending[existing] = entry;
   }
@@ -284,16 +278,13 @@ export class NotificationManager implements NotificationSystem {
    * blocked awaiting this run, so an announcement could only arrive after its
    * return. That carrier renders the update itself (`renderRunUpdates`), and
    * `Subagent.announceUpdate` reads the same claim to hand it over.
-   * The disposal latch and the parent-run withhold apply as they do to any
-   * announcement.
+   * Unlike completions, updates go straight to Pi's steering queue so the
+   * parent can act at its next model call, without waiting for agent_settled.
+   * The disposal latch still prevents new messages after shutdown.
    */
   sendUpdate(record: Subagent, message: string): void {
     if (this.disposed) return;
     if (record.claimed) return;
-    if (this.parentRunActive) {
-      this.pending.push({ kind: "update", record, message });
-      return;
-    }
     this.emitUpdate(record, message);
   }
 
@@ -341,10 +332,9 @@ export class NotificationManager implements NotificationSystem {
     const withheld = this.pending.splice(0);
     for (const entry of withheld) {
       try {
-        if (entry.kind === "update") this.emitUpdate(entry.record, entry.message);
         // A record can be resumed and stopped again before this flush. Its old
         // completion still belongs to the old run, even if status is terminal.
-        else if (entry.run === entry.record.abortController) this.emitIndividualNudge(entry.record);
+        if (entry.run === entry.record.abortController) this.emitIndividualNudge(entry.record);
       } catch (err) {
         debugLog("notification render", err);
       }
@@ -370,7 +360,7 @@ export class NotificationManager implements NotificationSystem {
         display: true,
         details,
       },
-      { deliverAs: "followUp", triggerTurn: true },
+      { deliverAs: "steer", triggerTurn: true },
     );
   }
 

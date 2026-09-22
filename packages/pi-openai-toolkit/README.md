@@ -116,13 +116,20 @@ Listed models get OpenAI's hosted `web_search`; their local `web_search` tool is
 
 ### Image generation
 
+Image generation requires a Responses session and may incur provider charges. Enable it with:
+
 ```json
 {
-  "imageGeneration": { "enabled": true }
+  "imageGeneration": {
+    "enabled": true,
+    "models": ["gpt-image-2.5", "grok-imagine-image-2.0"]
+  }
 }
 ```
 
-Adds `openai_generate_image` to every Responses-wire session, wrapping OpenAI's hosted `image_generation` tool (`gpt-image-2`): text-to-image and edits from explicitly passed local reference files. The wrapper stores image bytes as artifacts instead of session history. Each successful request may incur a charge, hence the default off.
+`models` contains the bare model IDs used by the nested Responses `image_generation` tool. The first entry is the default; `openai_generate_image` also accepts an optional `model` argument for a one-call override, but it must match a configured entry exactly. If `models` is omitted, the default is `gpt-image-2.5`. Empty or invalid lists are ignored with a warning and fall back to that default; set `enabled` to `false` to disable the tool. The provider or gateway must support the configured image model.
+
+The `openai_generate_image` tool supports text-to-image requests and edits using explicitly supplied local reference images.
 
 ### Auto mode
 

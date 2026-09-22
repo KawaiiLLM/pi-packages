@@ -3,6 +3,7 @@ import type { ResponsesRuntime } from "../runtime";
 import {
 	extractProviderErrorMessage,
 	parseImageGenerationResponse,
+	parseImageGenerationStream,
 	type ImageGenerationRequestBody,
 } from "./protocol";
 import {
@@ -39,8 +40,10 @@ export type ImageGenerationFetch = (
 	init?: RequestInit,
 ) => Promise<Response>;
 
-function buildRequestHeaders(runtime: ResponsesRuntime): Headers {
-	return buildResponsesRequestHeaders(runtime, { accept: "application/json" });
+function buildRequestHeaders(runtime: ResponsesRuntime, stream: boolean): Headers {
+	return buildResponsesRequestHeaders(runtime, {
+		accept: stream ? "text/event-stream" : "application/json",
+	});
 }
 
 async function readBoundedBody(
@@ -82,18 +85,15 @@ async function readBoundedBody(
 	return { ok: true, bytes };
 }
 
-function parseJson(bytes: Uint8Array): unknown {
-	const text = new TextDecoder().decode(bytes);
-	return JSON.parse(text) as unknown;
-}
-
 function providerFailureText(value: unknown): string {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return extractProviderErrorMessage(value, "").toLowerCase();
+	}
 	const candidate = value as Record<string, unknown>;
 	const error = candidate.error && typeof candidate.error === "object" && !Array.isArray(candidate.error)
 		? candidate.error as Record<string, unknown>
 		: candidate;
-	return [error.code, error.type, error.message]
+	return [error.code, error.type, extractProviderErrorMessage(value, "")]
 		.filter((item): item is string => typeof item === "string")
 		.join(" ")
 		.toLowerCase();
@@ -145,7 +145,7 @@ export async function requestGeneratedImage(args: {
 	try {
 		response = await fetchFn(args.runtime.responsesUrl, {
 			method: "POST",
-			headers: buildRequestHeaders(args.runtime),
+			headers: buildRequestHeaders(args.runtime, args.body.stream),
 			body: JSON.stringify(args.body),
 			signal,
 		});
@@ -206,27 +206,41 @@ export async function requestGeneratedImage(args: {
 		};
 	}
 
+	const text = new TextDecoder().decode(bounded.bytes);
+	if (response.ok && args.body.stream) {
+		const parsed = parseImageGenerationStream(text);
+		return parsed.ok
+			? { ok: true, image: parsed.image, status: response.status }
+			: { ok: false, reason: parsed.reason, errorMessage: parsed.errorMessage, status: response.status };
+	}
+
 	let payload: unknown;
 	try {
-		payload = parseJson(bounded.bytes);
+		payload = JSON.parse(text) as unknown;
 	} catch {
-		return {
-			ok: false,
-			reason: "malformed-response",
-			status: response.status,
-			errorMessage: response.ok
-				? "Image generation returned invalid JSON."
-				: defaultHttpMessage(response.status),
-		};
+		if (response.ok) {
+			return {
+				ok: false,
+				reason: "malformed-response",
+				status: response.status,
+				errorMessage: "Image generation returned invalid JSON.",
+			};
+		}
+		// Gateways may reject a request with plain text or HTML rather than JSON.
+		payload = text;
 	}
 
 	if (!response.ok) {
 		const reason = mapHttpFailure(response.status, payload);
+		const fallback = defaultHttpMessage(response.status, reason);
+		const diagnostic = extractProviderErrorMessage(payload, "");
 		return {
 			ok: false,
 			reason,
 			status: response.status,
-			errorMessage: extractProviderErrorMessage(payload, defaultHttpMessage(response.status, reason)),
+			errorMessage: diagnostic
+				? sanitizeImageDiagnostic(`HTTP ${response.status}: ${diagnostic}`, fallback)
+				: fallback,
 		};
 	}
 

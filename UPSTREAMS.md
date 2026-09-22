@@ -64,6 +64,10 @@ git log narumitw-local/import -- packages/pi-statusline
 - Toolkit 审批 verdict 解析器改为从后向前验证平衡的 JSON 对象，模型在最终 verdict 前序列化旧工具调用文本时仍取最后一个合法 `allow/deny`，没有合法对象时继续失败关闭；`pi-auto-mode` 同步该解析段。审批适配器也为 `subagent` 注册完整输入格式化器，避免任务说明先被权限系统的 200 字符通用预览截断，再统一接受 Toolkit 的 8,000 字符操作参数上限。
 - `pi-permission-system` 将 Pi 标记为 `interactive`/`rpc` 的 `/skill:name` 输入视为本次加载授权，仅跳过 `ask`；保留 `deny`、模型 Skill 读取及后续工具检查，不创建会话授权。复用 gate bypass、审计和决策事件，记录输入来源；`pi-subagents` 首次及 resume 的 `session.prompt()` 明确传 `source: "extension"`，避免默认来源误授。仍受宿主输入转换保留来源、直接 RPC steer/follow_up 不经过 input hook 的边界限制。
 - `pi-permission-system` 在同一 UI 会话复用人工终端，并将直接请求和子代理转发请求的人工弹窗排队；取消及会话结束会关闭活动弹窗、取消待处理请求，避免并发 `ui.custom` 相互覆盖后永久等待。模型审批仍可并行，权限规则不变。
+- Toolkit 生图模型配置、选择校验和测试来自上游 `0.14.5`（`a9746b50b68e3085233e5b55028110709072040f`），作为生图修复的前置一并纳入，双语 README 仅同步生图说明；不表示已提交其余上游升级。`imageGeneration.models` 首项为默认，调用可用 `model` 精确选择配置项；省略列表时沿用该上游默认 `gpt-image-2.5`，空或无效配置告警后回退默认。未配置的显式型号在付费请求前拒绝。不更改本机配置、不恢复包内 npm 锁文件。
+- Toolkit 生图按 API 选择响应模式：`openai-codex-responses` 使用 `stream: true` 与 SSE Accept 头，普通 `openai-responses` 保留非流式 JSON。复用 `remote-v2-client` 的 SSE 帧解析，在既有响应大小上限内读取；仅在 `response.completed`（或 Pi Codex 已支持的 `response.done`）成功终结后，按图片调用 ID 核对并合并 `response.output_item.done` 与终结输出，再走原单图／PNG 校验及保存流程。该扩展解决实测的终结 `output: []` 丢失已完成 item-done 图片问题；两份输出有冲突、响应标识不一致或存在多张有效图片时拒绝，不任选一份。部分图、item-added 或单独 item-done 不算成功，截断、失败、不完整或重复／乱序终结仍显式失败。保留取消、超时、诊断脱敏及不自动重试；已用一次真实 Codex 调用验证生成并保存 PNG，其他模型及参考图编辑路径未实测。
+- Toolkit 生图 `no-image` 错误新增有界结构诊断：合并后输出数量／类型、图片调用状态、结果字段类型／长度、脱敏错误，以及原始终结输出数量、SSE 事件计数和 image item-done 的结构摘要；只展示有限条目与已知标签，不复制正文、拒绝原文、提示词、标识或图片数据，不另写原始响应日志。中间事件不能替代整条响应成功终结，不自动重试；该诊断不代表真实生图已跑通。
+- Toolkit 生图 HTTP 错误保留状态码与脱敏后的 `message`／`error.message`／`detail`／`error.detail`／字符串错误，非 JSON 拒绝响应也提供有界文本，不再误判为成功响应格式错误。复用 64 KiB 错误体上限与 4,096 字符诊断上限，先脱敏再截断，补齐带引号凭据及完整认证／Cookie 头的清理；不记录原始响应体、不改请求协议、不自动重试。离线错误样例不代表真实后端的拒绝原因。
 - Toolkit 加载清单不再包含 `extensions/auto-mode.ts`；相应清单测试同步调整。原 Auto 源码保留，但不作为第二个门禁自动加载。
 - Toolkit 上下文工具按当前 registry 中的定义确认归属，不再将 Pi 启动时自动激活的工具误认为外部基线；关闭功能会隐藏本插件工具，启用恢复。每次同步重新检查归属，部分注册失败或同名冲突时仅清理仍属于本插件的工具。新增控制器回归测试和真实 Pi 默认激活场景的冒烟测试。
 - Toolkit 移除 npm `bun` 开发依赖，改为环境前置要求，避免跳过安装脚本后空执行文件造成测试假通过。

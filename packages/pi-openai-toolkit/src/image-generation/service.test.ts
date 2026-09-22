@@ -5,9 +5,11 @@ import {
 	DEFAULT_WEB_SEARCH_CONFIG,
 } from "../types";
 import { createImageGenerationExecutor, type ImageGenerationServiceDependencies } from "./service";
-import { validPng } from "./test-helpers";
+import { isImageGenerationDetails } from "./types";
+import { completedImageResponse, validPng } from "./test-helpers";
+import { requestGeneratedImage } from "./client";
 
-function config() {
+function config(models?: string[]) {
 	return {
 		config: {
 			compaction: {
@@ -18,7 +20,11 @@ function config() {
 				...DEFAULT_WEB_SEARCH_CONFIG,
 				models: [...DEFAULT_WEB_SEARCH_CONFIG.models],
 			},
-			imageGeneration: { ...DEFAULT_IMAGE_GENERATION_CONFIG, enabled: true },
+			imageGeneration: {
+				...DEFAULT_IMAGE_GENERATION_CONFIG,
+				enabled: true,
+				models: models ?? [...DEFAULT_IMAGE_GENERATION_CONFIG.models],
+			},
 		},
 		warnings: [],
 	};
@@ -36,6 +42,64 @@ function context() {
 		model,
 		sessionManager: { getSessionId: () => "session-test" },
 	} as never;
+}
+
+/**
+ * Captures the outgoing request body so a test can compare the nested image model with the
+ * details the service returns, without ever reaching the real transport.
+ */
+function modelProbeDeps(configuredModels: string[] | undefined): {
+	deps: ImageGenerationServiceDependencies;
+	calls: { body: Record<string, unknown>; dispatched: boolean };
+} {
+	const calls = { body: {} as Record<string, unknown>, dispatched: false };
+	const base = config();
+	const deps = {
+		loadConfig: () => ({
+			...base,
+			config: {
+				...base.config,
+				imageGeneration: {
+					...base.config.imageGeneration,
+					models: configuredModels ?? [...base.config.imageGeneration.models],
+				},
+			},
+		}),
+		resolveRuntime: async () => ({
+			ok: true,
+			runtime: {
+				provider: "newapi",
+				api: "openai-responses",
+				model: "gpt-5.5",
+				baseUrl: "https://gateway.example/v1",
+				apiKey: "sk-runtime",
+				responsesPath: "responses",
+				responsesUrl: "https://gateway.example/v1/responses",
+				currentModel: model as never,
+			},
+		}),
+		getAgentDir: () => "/agent",
+		prepareOutput: async () => undefined,
+		prepareReferences: async () => [],
+		requestImage: async (args: { body: unknown }) => {
+			calls.dispatched = true;
+			calls.body = args.body as Record<string, unknown>;
+			return {
+				ok: true,
+				status: 200,
+				image: {
+					bytes: validPng(),
+					imageCallId: "ig_test",
+					width: 1,
+					height: 1,
+				},
+			};
+		},
+		saveCanonical: async () => "/agent/generated-images/session-test/ig_test.png",
+		copyExplicit: async () => undefined,
+		clearReferences: () => {},
+	} as unknown as ImageGenerationServiceDependencies;
+	return { deps, calls };
 }
 
 describe("image generation service", () => {
@@ -102,13 +166,13 @@ describe("image generation service", () => {
 		});
 
 		expect((requestBody?.tools as Array<Record<string, unknown>>)[0]).toEqual(
-			expect.objectContaining({ type: "image_generation", model: "gpt-image-2", action: "edit" }),
+			expect.objectContaining({ type: "image_generation", model: "gpt-image-2.5", action: "edit" }),
 		);
 		expect(result.details).toEqual(
 			expect.objectContaining({
 				artifactPath: "/agent/generated-images/session-test/ig_test.png",
 				routingModel: "newapi/gpt-5.5",
-				imageModel: "gpt-image-2",
+				imageModel: "gpt-image-2.5",
 				edited: true,
 				referenceCount: 1,
 				warning: "copy failed with [REDACTED]",
@@ -118,6 +182,143 @@ describe("image generation service", () => {
 		expect(JSON.stringify(result)).not.toContain("base64");
 		expect(referenceBytes.every((byte) => byte === 0)).toBe(true);
 		expect(generatedBytes.every((byte) => byte === 0)).toBe(true);
+	});
+
+	test("sends and records the configured default image model when the tool omits one", async () => {
+		const probe = modelProbeDeps(["grok-imagine-image-2.0", "gpt-image-2"]);
+		const execute = createImageGenerationExecutor(probe.deps);
+		const result = await execute({
+			params: { prompt: "draw a cat", model: null },
+			toolCallId: "call",
+			ctx: context(),
+		});
+
+		expect((probe.calls.body?.tools as Array<Record<string, unknown>>)[0]).toEqual(
+			expect.objectContaining({ type: "image_generation", model: "grok-imagine-image-2.0" }),
+		);
+		// The nested image model never replaces the current Responses routing model.
+		expect(probe.calls.body?.model).toBe("gpt-5.5");
+		expect(result.details).toEqual(
+			expect.objectContaining({ imageModel: "grok-imagine-image-2.0", routingModel: "newapi/gpt-5.5" }),
+		);
+		expect(isImageGenerationDetails(result.details)).toBe(true);
+	});
+
+	test("sends and records an explicitly selected configured image model", async () => {
+		const probe = modelProbeDeps(["grok-imagine-image-2.0", "gpt-image-2"]);
+		const execute = createImageGenerationExecutor(probe.deps);
+		const result = await execute({
+			params: { prompt: "draw a cat", model: " gpt-image-2 " },
+			toolCallId: "call",
+			ctx: context(),
+		});
+
+		expect((probe.calls.body?.tools as Array<Record<string, unknown>>)[0]).toEqual(
+			expect.objectContaining({ type: "image_generation", model: "gpt-image-2" }),
+		);
+		expect(result.details.imageModel).toBe("gpt-image-2");
+	});
+
+	test.each(["terminal", "item-done", "truncated", "failed"])("Codex service only saves a validated image after successful stream completion (%s)", async (mode) => {
+		const probe = modelProbeDeps(["gpt-image-2"]);
+		const resolved = await probe.deps.resolveRuntime(context(), {});
+		if (!resolved.ok) throw new Error("Expected runtime fixture");
+		probe.deps.resolveRuntime = async () => ({
+			ok: true,
+			runtime: { ...resolved.runtime, api: "openai-codex-responses" },
+		});
+		let requests = 0;
+		let saved = 0;
+		probe.deps.requestImage = (args) => requestGeneratedImage({
+			...args,
+			fetchFn: async (_url, init) => {
+				requests += 1;
+				expect(JSON.parse(String(init?.body)).stream).toBe(true);
+				const itemDone = { type: "response.output_item.done", item: (completedImageResponse().output as unknown[])[0] };
+				const events = mode === "terminal"
+					? [{ type: "response.completed", response: completedImageResponse() }]
+					: mode === "truncated" ? [itemDone] : [
+						itemDone,
+						{ type: "response.completed", response: completedImageResponse({ output: [], status: mode === "failed" ? "failed" : "completed" }) },
+					];
+				return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+					headers: { "content-type": "text/event-stream" },
+				});
+			},
+		});
+		probe.deps.saveCanonical = async ({ bytes }) => {
+			saved += 1;
+			expect(bytes).toEqual(validPng());
+			return "/agent/generated-images/session-test/ig_test.png";
+		};
+		const pending = createImageGenerationExecutor(probe.deps)({
+			params: { prompt: "draw a cat" }, toolCallId: "call", ctx: context(),
+		});
+		if (mode === "terminal" || mode === "item-done") {
+			const result = await pending;
+			expect(result.details.imageCallId).toBe("ig_test");
+			expect(saved).toBe(1);
+		} else {
+			await expect(pending).rejects.toThrow(mode === "truncated" ? "response.completed" : "status: failed");
+			expect(saved).toBe(0);
+		}
+		expect(requests).toBe(1);
+	});
+
+	test.each([false, true])("preserves no-image diagnostics through the service without saving or retrying (stream: %s)", async (stream) => {
+		const probe = modelProbeDeps(["gpt-image-2"]);
+		const resolved = await probe.deps.resolveRuntime(context(), {});
+		if (!resolved.ok) throw new Error("Expected runtime fixture");
+		probe.deps.resolveRuntime = async () => ({
+			ok: true,
+			runtime: { ...resolved.runtime, api: stream ? "openai-codex-responses" : "openai-responses" },
+		});
+		let requests = 0;
+		let saved = false;
+		let cleared = false;
+		probe.deps.requestImage = (args) => requestGeneratedImage({
+			...args,
+			fetchFn: async () => {
+				requests += 1;
+				const response = { status: "completed", output: [{
+					type: "image_generation_call", status: "failed",
+					error: { detail: "unsupported image tool; sk-private12345678" },
+				}] };
+				return new Response(stream
+					? `data: ${JSON.stringify({ type: "response.completed", response })}\n\n`
+					: JSON.stringify(response));
+			},
+		});
+		probe.deps.saveCanonical = async () => { saved = true; throw new Error("Must not save"); };
+		probe.deps.clearReferences = () => { cleared = true; };
+		let failure: unknown;
+		try {
+			await createImageGenerationExecutor(probe.deps)({
+				params: { prompt: "draw a cat" }, toolCallId: "call", ctx: context(),
+			});
+		} catch (error) { failure = error; }
+		expect(failure).toMatchObject({ code: "no-image" });
+		if (!(failure instanceof Error)) throw new Error("Expected failure");
+		expect(failure.message).toContain('"status":"failed"');
+		expect(failure.message).toContain("unsupported image tool; [REDACTED]");
+		expect(failure.message).not.toContain("private");
+		expect(failure.message.includes("Stream diagnostic:")).toBe(stream);
+		expect(requests).toBe(1);
+		expect(saved).toBe(false);
+		expect(cleared).toBe(true);
+	});
+
+	test("fails before dispatch when the requested image model is not configured", async () => {
+		const probe = modelProbeDeps(["gpt-image-2"]);
+		const execute = createImageGenerationExecutor(probe.deps);
+		await expect(
+			execute({
+				params: { prompt: "draw a cat", model: "grok-imagine-image-2.0" },
+				toolCallId: "call",
+				ctx: context(),
+			}),
+		).rejects.toThrow('Unknown image generation model "grok-imagine-image-2.0"');
+		expect(probe.calls.dispatched).toBe(false);
 	});
 
 	test("does not dispatch an already-cancelled paid request", async () => {

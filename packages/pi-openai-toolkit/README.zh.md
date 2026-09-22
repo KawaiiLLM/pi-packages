@@ -17,7 +17,7 @@ Pi 内置压缩把较早的轮次摘要为文本，细节永久丢失。OpenAI C
 - **工作记忆笔记** - `notes` 持久化存档，作为每次换窗的门禁
 - **加密压缩 v2** - OpenAI 后端压缩能力，为 Responses 模型接通
 - **托管联网搜索** - OpenAI Responses 原生 `web_search`，对列入的模型替换 Pi 本地工具
-- **图像生成** - 托管 `image_generation`（gpt-image-2）的 Pi 封装，图像字节不入会话历史
+- **图像生成** - 托管 `image_generation`（可配置模型）的 Pi 封装，图像字节不入会话历史
 - **Auto 模式** - 本包自有功能：副作用工具调用的审查模型门禁
 - **安全承诺** - 覆盖模型上杜绝有损摘要，凭据不出本机
 
@@ -116,13 +116,20 @@ pi --model uwoacrimson/gpt-6-astra
 
 ### 图像生成
 
+图像生成需要 Responses 会话，并且可能产生服务商费用。启用方式如下：
+
 ```json
 {
-  "imageGeneration": { "enabled": true }
+  "imageGeneration": {
+    "enabled": true,
+    "models": ["gpt-image-2.5", "grok-imagine-image-2.0"]
+  }
 }
 ```
 
-为所有 Responses 协议会话添加 `openai_generate_image`，封装 OpenAI 托管 `image_generation` 工具（`gpt-image-2`）：文生图，以及显式传入本地参考文件的编辑。图像字节以 artifact 存储而非进入会话历史。每次成功请求都可能产生费用，默认关闭。
+`models` 填写嵌套 Responses `image_generation` 工具使用的裸模型 ID。列表第一项是默认模型；`openai_generate_image` 也支持通过可选的 `model` 参数在单次调用中切换，但该值必须与配置列表中的某一项完全一致。省略 `models` 时默认使用 `gpt-image-2.5`。列表为空或格式无效时会告警并回退到默认模型；如果要关闭工具，将 `enabled` 设置为 `false`。服务商或网关必须实际支持配置的生图模型。
+
+`openai_generate_image` 支持文生图，也支持使用明确传入的本地参考图片进行编辑。
 
 ### Auto 模式
 

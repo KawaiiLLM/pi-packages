@@ -1,0 +1,12 @@
+{
+	"extends": "./tsconfig.json",
+	"include": [
+		"packages/pi-usage/src/**/*.ts",
+		"packages/pi-usage/test/**/*.ts",
+		"packages/pi-statusline/src/**/*.ts",
+		"packages/pi-statusline/test/**/*.ts",
+		"packages/pi-tui-kit/src/**/*.ts",
+		"packages/pi-tui-kit/test/**/*.ts",
+		"test/**/*.ts"
+	]
+}

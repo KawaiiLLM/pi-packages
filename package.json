@@ -6,13 +6,23 @@
   "packageManager": "pnpm@10.31.0",
   "engines": { "node": ">=24.0.0" },
   "scripts": {
-    "build": "pnpm --filter @gotgenes/pi-subagents build:types && pnpm --filter @gotgenes/pi-permission-system build:types",
-    "check": "pnpm build && pnpm --filter @gotgenes/pi-subagents check && pnpm --filter @gotgenes/pi-permission-system check && pnpm --filter pi-openai-toolkit typecheck && pnpm --filter pi-auto-mode check",
+    "build": "pnpm --filter @gotgenes/pi-subagents build:types && pnpm --filter @gotgenes/pi-permission-system build:types && pnpm build:status",
+    "build:status": "pnpm --filter @narumitw/pi-tui-kit build && pnpm --filter @narumitw/pi-usage build && pnpm --filter @narumitw/pi-statusline build",
+    "check": "pnpm build && pnpm --filter @gotgenes/pi-subagents check && pnpm --filter @gotgenes/pi-permission-system check && pnpm --filter pi-openai-toolkit typecheck && pnpm --filter pi-auto-mode check && pnpm check:status",
+    "check:status": "pnpm --filter @narumitw/pi-tui-kit check && pnpm --filter @narumitw/pi-usage check && pnpm --filter @narumitw/pi-statusline check && tsc --noEmit -p tsconfig.status-tests.json",
+    "test:status": "vitest run --config vitest.status.config.ts packages/pi-tui-kit/test packages/pi-usage/test packages/pi-statusline/test",
+    "test:status:integration": "vitest run --config vitest.status.config.ts test/usage-statusline.integration.test.ts",
     "test": "pnpm -r --workspace-concurrency=1 test",
-    "test:integration": "pnpm --filter pi-auto-mode test:integration"
+    "test:integration": "pnpm --filter pi-auto-mode test:integration && pnpm test:status:integration"
   },
   "devDependencies": {
+    "@narumitw/pi-tui-kit": "workspace:*",
     "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@biomejs/biome": "2.5.11",
+    "esbuild": "0.28.2",
+    "vitest": "4.1.11",
     "@types/node": "^24.12.4",
     "typescript": "^6.0.3"
   }

@@ -6,6 +6,8 @@
 | `pi-permission-system` | 同上，目录 `packages/pi-permission-system` | tag `pi-permission-system-v31.1.3`；commit `cf99c19b2cad9d26f6c4d0b9dc464c7fde0fab18` |
 | `pi-openai-toolkit` | https://github.com/awoaCrim/pi-openai-toolkit | commit `32d568ab6b58f8c914e3c143d625869a71ad55a3` |
 | `pi-auto-mode` | 本地 `~/Projects/pi-model-approver/`，导入时改目录名 | 初始快照提交 `e9b80ae6`；Toolkit 策略快照归属见包内 `src/vendor/toolkit/README.md` |
+| `pi-usage`、`pi-statusline` | https://github.com/narumiruna/pi-extensions ，同名 `packages/` 目录 | 上游起点 `530b081ed5f0feed6a5c7fda2f4a3f9c7c1f9cee`；本地导入 `11a0fcf95823bc63ec9c63368ad9f666a6ef41d7`，叠加原工作区未提交的统计修复；版本分别为 `0.60.3`、`0.50.0` |
+| `pi-tui-kit` | 同上，目录 `packages/pi-tui-kit` | `0.59.0`；commit `efc0c56e20f9ad9092d803904783b3d1cd9e1b7d`，与原两个插件实际安装的依赖一致，不夹带源 HEAD 的 `0.60.0` 升级 |
 
 ## 历史保留
 
@@ -27,9 +29,30 @@ git diff cf99c19b:packages/pi-permission-system HEAD:packages/pi-permission-syst
 git diff 32d568ab HEAD:packages/pi-openai-toolkit
 ```
 
+## narumitw 目录更新
+
+2026-09-12 的迁移保留原 `pi-extensions` 工作树，不在原仓提交、清理或回滚。原状态栏未提交的递归日志统计、今日刷新、Prism 预算显示及其测试一并导入。两个插件共用的 `test/` helpers、Vitest 隔离与超时机制、Biome 配置沿用本地导入基线；Kit 使用上述独立版本基线。保留 Kit 懒加载测试依赖的根 benchmark 脚本，并以 workspace 开发依赖解析本地 Kit；两个 Kit 测试改为按 pnpm 实际路径检查，未改库业务源码。共享 mock 使用对应 Pi interface 类型，新增源码与测试的联合类型检查。
+
+导入基线 `11a0fcf95823bc63ec9c63368ad9f666a6ef41d7` 的完整源历史已通过 `ours` 合并接入本仓主线祖先，包含上述上游起点与 Kit 基线，随主线推送。合并只保留历史，选定目录及本地修改另行提交，不把源主线的其他包合入工作树。本地 `narumitw-local/import` 指向导入基线，`upstream-narumiruna/main` 仅作后续更新参考，不代表已合入该分支的全部更新。
+
+后续更新按包选择旧基线到新基线的差异，先审查再应用：
+
+```bash
+git fetch --no-tags https://github.com/narumiruna/pi-extensions.git main:refs/remotes/upstream-narumiruna/main
+git diff 530b081ed5f0feed6a5c7fda2f4a3f9c7c1f9cee upstream-narumiruna/main -- packages/pi-usage packages/pi-statusline
+git log narumitw-local/import -- packages/pi-statusline
+```
+
+更新时保持目录名，以旧基线做三方合并；不要用整目录覆盖本地改动。Git 历史便于定位冲突，不保证自动合并：状态栏自身布局定制、usage 发布位置、依赖 manifest 和被移出的重复逻辑仍需人工核对。Kit 按自己的基线独立更新。
+
 ## 集成差异
 
-- 建立 pnpm workspace、统一锁文件与根目录检查命令；保留各上游包的测试和开发版本基线。
+- 建立 pnpm workspace、统一锁文件与根目录检查命令；保留各上游包的测试。新导入 narumitw 包的 Pi 开发依赖对齐本仓 `0.85.1`，编译器使用已有 TypeScript 6，避免夹带其他插件或宿主升级；Kit 为显式 `workspace:*`，不另装注册表副本。
+- `pi-usage` 保留上游账号查询、缓存、菜单和 Fast 主流程，新增独立的结构化快照发布；迁入原状态栏的递归会话日志金额、5h／周估算和今日预算运算，不增加第二套 provider 查询。快照不携带凭据，使用会话和模型标识处理切换失效及重新订阅；今日扫描恢复成功后仅清除自身的旧错误，不清除其他诊断。
+- `pi-statusline` 只通过 `@narumitw/pi-usage/snapshot` 和 Pi 事件总线消费数据，删除复制的查询目录、日志扫描、Fast 请求与费用钩子及 `/usage`、`/fast`。颜色、图标、布局和倒计时／金额轮播保留；Prism 前导 `░▒▓` 分别使用 `#3A3A3A`、`#4A4A4A`、`#5A5A5A`；背景按 `#5A5A5A`、`#4A4A4A`、`#3A3A3A`、`#2A2A2A`、`#1A1A1A` 五段循环，不改 Mono；模型与思考强度基础字体色统一为 `#E77B92`，5h 与周用量基础字体色统一为 `#DCE58A`，缓存基础字体色为 `#A582DD`，保留原有对比度适配及 80% 告警前景／背景反转；`pi-usage` 不再单独发布一条 usage 状态。今日金额的订阅标识不再调用 `modelRegistry.isUsingOAuth`：无预算百分比时，仅在有用量快照或模型公开 provider 为 `kimi-coding` 时显示 `(sub)`，否则不猜测账号类型。此个人工作区有意偏离上游「扩展完全独立」约定，耦合集中在公开快照入口，不解析显示字符串。
+- `pi-usage.json` 唯一持有 Fast 设置，`pi-statusline.json` 只管理显示。两包构建脚本各自保留，不为迁移抽成通用 builder；新增的 Vitest 配置只覆盖这批包和跨包用量集成，不接管原包测试。
+- Fast 能力改读当前匹配的 Codex OAuth 账号模型目录：仅结构化 `service_tiers` 的 `priority` 确认支持，不再查型号白名单；缺失、畸形、旧字段单独声明或请求失败均明确为未知。复用现有认证匹配与有界 HTTP 读取，拒绝重定向，目录最大 2 MiB；按账号与协议版本缓存五分钟、合并并发读取，取消和会话切换不发布旧数据。可在 `pi-usage.json` 配置 `codexModelsClientVersion`，默认 `0.153.4`；契约固定于官方 Codex `aee8a55ab6010f1d53e741edec74dbcffa07bcfe`。目录实测仍被当前审批链拦截，未绕过；实现通过离线响应验证，Fast 默认关闭。
+- 目录不提供结构化价格。旧五款模型的已知费用重算保留为独立价目兼容，不作为 Fast 支持名单；新型号不套默认倍率，保留 Pi 返回的估算费用并明确提示可能缺少 Fast 附加费。Pi 会吞下 payload hook 的异常，因此已开启 Fast 但无法验证能力时，还会中止所属运行，防止请求沿旧 payload 静默继续。
 - 所有包标为私有，未发布或修改上游归属。
 - `pi-auto-mode` 通过 `workspace:*` 链接本仓两个 gotgenes 服务包，而非另装注册表副本；其运行逻辑未重写。
 - `pi-subagents` 的 `resume` 按既有代理类型解析前后台模式：后台立即返回并复用并发队列，前台等待结果；每轮重置取消控制器和结果交付状态，后台不绑定父调用取消信号，仍支持显式停止及会话清理。补充排队取消、模式切换和旧完成通知跨轮误发的回归测试。

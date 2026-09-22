@@ -1,0 +1,72 @@
+{
+	"name": "@narumitw/pi-tui-kit",
+	"version": "0.59.0",
+	"description": "Declarative UI flows and navigation helpers built on Pi TUI.",
+	"type": "module",
+	"license": "MIT",
+	"private": true,
+	"sideEffects": false,
+	"keywords": [
+		"pi",
+		"pi-extension",
+		"tui",
+		"menu",
+		"library"
+	],
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./editor-status-widget": {
+			"types": "./dist/editor-status-widget.d.ts",
+			"import": "./dist/editor-status-widget.js"
+		},
+		"./interaction-hints": {
+			"types": "./dist/interaction-hints.d.ts",
+			"import": "./dist/interaction-hints.js"
+		},
+		"./terminal-text": {
+			"types": "./dist/terminal-text.d.ts",
+			"import": "./dist/terminal-text.js"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.ts",
+			"import": "./dist/testing/index.js"
+		}
+	},
+	"scripts": {
+		"test": "cd ../.. && vitest run --config vitest.status.config.ts packages/pi-tui-kit/test",
+		"build": "node ./scripts/build.mjs",
+		"prepack": "npm run build",
+		"check": "biome check src test scripts package.json tsconfig.json tsconfig.build.json && npm run typecheck && npm run build",
+		"format": "biome check --write src test scripts package.json tsconfig.json tsconfig.build.json",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.11",
+		"@earendil-works/pi-coding-agent": "0.85.1",
+		"@earendil-works/pi-tui": "0.85.1",
+		"typescript": "^6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "packages/pi-tui-kit"
+	},
+	"dependencies": {
+		"grok-mermaid": "0.2.3",
+		"highlight.js": "11.12.0"
+	}
+}

@@ -3,6 +3,9 @@
 - 从仓库根目录工作；包内 AGENTS.md 是保留的上游说明，不代表当前会话从子目录启动。
 - 修改前阅读相关实现和对应包文档，优先复用已有机制，不另建重复的会话、日志或权限系统。
 - `pi-subagents` 管生命周期；`pi-permission-system` 管权限；`pi-auto-mode` 只做审批适配；Toolkit 保留非门禁功能。
+- `pi-usage` 独占用量查询、账号缓存、日志金额、预算计算及 Fast；`pi-statusline` 只消费公开快照并统一渲染，不重复查询、统计或注册 `/usage`、`/fast`。
+- 两包只通过 `@narumitw/pi-usage/snapshot` 和 Pi 事件总线交接结构化数据；本地此分工优先于保留的上游「扩展必须完全独立」约定。
+- 构建 `pi-tui-kit` 后再构建或测试用量和状态栏；不并行清理同一份构建输出。
 - Toolkit 审批提示词、裁剪和解析使用固定源码快照；未经用户确认，不另定预算、授权政策或回退规则。
 - 审批代理仅有 `read`、`grep`、`find`、`ls` 四个只读证据工具，最多调查 3 个模型轮次，第 4 轮无工具输出最终 verdict；模型与思考强度从代理文件读取，插件排除复用 `excludedExtensionPackages`。
 - 保留各包 LICENSE、NOTICE 与上游历史；修改上游实现时更新 UPSTREAMS.md 的差异说明。

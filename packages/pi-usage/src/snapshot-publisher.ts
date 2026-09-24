@@ -8,8 +8,8 @@ import {
 	type UsageSnapshot,
 	usageModelKey,
 } from "./snapshot.js";
+import { SpendLedger } from "./spend-ledger.js";
 import type { UsageReport } from "./types.js";
-import { sumProviderSpend } from "./usage-spend.js";
 import {
 	selectUsageWindows,
 	type UsageWindow,
@@ -25,6 +25,8 @@ export function createSnapshotPublisher(
 	sessionsDir: string,
 	fastState: (model: ExtensionContext["model"]) => NonNullable<UsageSnapshot["fast"]>,
 ) {
+	const ledger = new SpendLedger(sessionsDir);
+	let terminated = false;
 	let context: ExtensionContext | undefined;
 	let snapshot: UsageSnapshot | undefined;
 	let revision = 0;
@@ -40,23 +42,26 @@ export function createSnapshotPublisher(
 		});
 		events.emit(USAGE_SNAPSHOT_EVENT, snapshot);
 	};
-	const daily = createDailySpendRefresher({
-		sessionsDir,
-		onUpdate(dailySpend) {
-			if (!snapshot) return;
-			snapshot = {
-				...snapshot,
-				dailySpend: dailySpend && Object.freeze(dailySpend),
-				error: dailySpend && snapshot.error === DAILY_SPEND_ERROR ? undefined : snapshot.error,
-			};
-			emit();
-		},
-		onError() {
-			if (!snapshot) return;
-			snapshot = { ...snapshot, error: DAILY_SPEND_ERROR };
-			emit();
-		},
-	});
+	const createDaily = () =>
+		createDailySpendRefresher({
+			sessionsDir,
+			ledger,
+			onUpdate(dailySpend) {
+				if (!snapshot) return;
+				snapshot = {
+					...snapshot,
+					dailySpend: dailySpend && Object.freeze(dailySpend),
+					error: dailySpend && snapshot.error === DAILY_SPEND_ERROR ? undefined : snapshot.error,
+				};
+				emit();
+			},
+			onError() {
+				if (!snapshot) return;
+				snapshot = { ...snapshot, error: DAILY_SPEND_ERROR };
+				emit();
+			},
+		});
+	let daily = createDaily();
 	const cancelScan = () => {
 		revision += 1;
 		scan?.abort();
@@ -95,6 +100,8 @@ export function createSnapshotPublisher(
 		) {
 			snapshot = undefined;
 			daily.stop();
+			ledger.release("fiveHour");
+			ledger.release("weekly");
 			snapshot = next;
 		} else {
 			snapshot = { ...snapshot, fast: next.fast };
@@ -108,12 +115,18 @@ export function createSnapshotPublisher(
 		if (!context) return;
 		snapshot = undefined;
 		daily.stop();
+		ledger.release("fiveHour");
+		ledger.release("weekly");
 		snapshot = empty(context);
 		emit();
 		daily.refresh(context);
 	};
 	return {
 		start(ctx: ExtensionContext) {
+			if (terminated) {
+				daily = createDaily();
+				terminated = false;
+			}
 			context = undefined;
 			snapshot = undefined;
 			daily.stop();
@@ -140,6 +153,8 @@ export function createSnapshotPublisher(
 		},
 		clearUsage(error?: string) {
 			cancelScan();
+			ledger.release("fiveHour");
+			ledger.release("weekly");
 			if (!snapshot) return;
 			snapshot = { ...snapshot, usage: undefined, error };
 			emit();
@@ -161,6 +176,7 @@ export function createSnapshotPublisher(
 			cancelScan();
 			if (!snapshot) return;
 			const owner = revision;
+			const activeLedger = ledger;
 			const sessionId = snapshot.sessionId;
 			const modelKey = snapshot.modelKey;
 			const controller = new AbortController();
@@ -182,12 +198,14 @@ export function createSnapshotPublisher(
 				window: UsageWindow | undefined,
 			): Promise<PricedUsageWindow | undefined> => {
 				if (!window) return undefined;
-				const spent = await sumProviderSpend(
-					sessionsDir,
-					report.providerId,
-					usageWindowStart(window),
+				const start = usageWindowStart(window);
+				await activeLedger.update(
+					window === windows.fiveHour ? "fiveHour" : "weekly",
+					start,
 					controller.signal,
 				);
+				if (!current()) return undefined;
+				const spent = activeLedger.sum(report.providerId, start);
 				return Object.freeze({
 					...window,
 					spent,
@@ -196,6 +214,8 @@ export function createSnapshotPublisher(
 			};
 			const windows =
 				report.semantics.kind === "consumer-subscription" ? selectUsageWindows(report) : {};
+			if (!windows.fiveHour) ledger.release("fiveHour");
+			if (!windows.weekly) ledger.release("weekly");
 			void (async () => {
 				const [fiveHour, weekly] = await Promise.all([
 					price(windows.fiveHour),
@@ -246,6 +266,8 @@ export function createSnapshotPublisher(
 			}
 			snapshot = undefined;
 			context = undefined;
+			ledger.stop();
+			terminated = true;
 		},
 	};
 }

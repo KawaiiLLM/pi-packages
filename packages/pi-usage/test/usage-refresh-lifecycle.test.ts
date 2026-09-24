@@ -16,6 +16,7 @@ vi.mock("../src/query.js", async (importOriginal) => ({
 	queryProviderUsage: vi.fn(),
 }));
 vi.mock("../src/usage-spend.js", () => ({ sumProviderSpend: vi.fn() }));
+vi.mock("../src/spend-ledger.js", async () => import("./support/mock-spend-ledger.js"));
 
 const TTL = 5 * 60_000;
 const BACKOFF = 30_000;

@@ -6,6 +6,7 @@ import { createDailySpendRefresher, type DailySpend } from "../src/daily-spend.j
 import { sumProviderSpend } from "../src/usage-spend.js";
 
 vi.mock("../src/usage-spend.js", () => ({ sumProviderSpend: vi.fn() }));
+vi.mock("../src/spend-ledger.js", async () => import("./support/mock-spend-ledger.js"));
 afterEach(() => vi.resetAllMocks());
 
 function context(provider = "openai-codex"): ExtensionContext {

@@ -3,7 +3,7 @@ import { type DailySpend, type UsageRuntime, usageModelKey } from "./snapshot.js
 
 export type { DailySpend } from "./snapshot.js";
 
-import { sumProviderSpend } from "./usage-spend.js";
+import { SpendLedger } from "./spend-ledger.js";
 
 /** The weekly window spread evenly, as a share of the window per day. */
 const DAILY_SHARE = 100 / 7;
@@ -39,6 +39,7 @@ export function dailyBudgetPercent(
 
 export interface DailySpendRefresherOptions {
 	sessionsDir: string;
+	ledger?: SpendLedger;
 	onUpdate: (spend: DailySpend | undefined) => void;
 	onError?: () => void;
 }
@@ -54,6 +55,7 @@ export interface DailySpendRefresher {
 export function createDailySpendRefresher(
 	options: DailySpendRefresherOptions,
 ): DailySpendRefresher {
+	const ledger = options.ledger ?? new SpendLedger(options.sessionsDir);
 	let revision = 0;
 	let owner: ExtensionContext["sessionManager"] | undefined;
 	let controller: AbortController | undefined;
@@ -65,6 +67,7 @@ export function createDailySpendRefresher(
 			const current = ++revision;
 			owner = ctx.sessionManager;
 			if (!providerId) {
+				ledger.release("today");
 				options.onUpdate(undefined);
 				return;
 			}
@@ -80,9 +83,11 @@ export function createDailySpendRefresher(
 				ctx.sessionManager.getSessionId() === sessionId &&
 				usageModelKey(ctx.model) === modelKey &&
 				startOfLocalDay(Date.now()) === day;
-			void sumProviderSpend(options.sessionsDir, providerId, day, scan.signal)
-				.then((dollars) => {
+			void ledger
+				.update("today", day, scan.signal)
+				.then(() => {
 					if (!isCurrent()) return;
+					const dollars = ledger.sum(providerId, day);
 					options.onUpdate({ day, providerId, dollars });
 				})
 				.catch(() => {
@@ -100,6 +105,7 @@ export function createDailySpendRefresher(
 			controller = undefined;
 			revision += 1;
 			owner = undefined;
+			ledger.release("today");
 			options.onUpdate(undefined);
 		},
 	};

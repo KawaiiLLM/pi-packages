@@ -16,6 +16,7 @@ import usageExtension from "../src/usage.js";
 import { showUsageSettings } from "../src/usage-settings-ui.js";
 
 vi.mock("../src/usage-spend.js", () => ({ sumProviderSpend: vi.fn(async () => 0) }));
+vi.mock("../src/spend-ledger.js", async () => import("./support/mock-spend-ledger.js"));
 const mocks: ReturnType<typeof createBaseMockPi>[] = [];
 function createMockPi() {
 	const mock = createBaseMockPi();

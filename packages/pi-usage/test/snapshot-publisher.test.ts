@@ -13,6 +13,7 @@ import type { UsageReport } from "../src/types.js";
 import { sumProviderSpend } from "../src/usage-spend.js";
 
 vi.mock("../src/usage-spend.js", () => ({ sumProviderSpend: vi.fn() }));
+vi.mock("../src/spend-ledger.js", async () => import("./support/mock-spend-ledger.js"));
 afterEach(() => {
 	vi.resetAllMocks();
 	vi.useRealTimers();
